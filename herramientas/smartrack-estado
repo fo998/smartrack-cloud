@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Resumen del estado del servidor SmartRack.  Uso:  smartrack-estado   (mejor con sudo)
+set -uo pipefail
+V=$'\e[32m'; R=$'\e[31m'; A=$'\e[33m'; N=$'\e[0m'; B=$'\e[1m'
+if [[ -r /etc/smartrack/config.env ]]; then
+  # shellcheck source=/dev/null
+  source /etc/smartrack/config.env
+fi
+
+echo "${B}Servicios${N}"
+for s in mosquitto nodered nginx smartrack-duckdns.timer certbot.timer; do
+  if systemctl list-unit-files "$s" "$s.service" 2>/dev/null | grep -q "^$s"; then
+    if systemctl is-active --quiet "$s"; then echo "  ${V}●${N} $s activo"; else echo "  ${R}●${N} $s DETENIDO  ->  sudo journalctl -u ${s%.timer} -n 50"; fi
+  fi
+done
+
+echo "${B}Red${N}"
+ip="$(/usr/local/bin/smartrack-ip-publica 2>/dev/null || echo '?')"
+echo "  IP pública: $ip"
+if [[ -n "${DOMINIO:-}" ]]; then
+  dns="$(dig +short A "$DOMINIO" @1.1.1.1 2>/dev/null | tail -n1)"
+  if [[ "$dns" == "$ip" ]]; then echo "  ${V}✔${N} $DOMINIO -> $dns"; else echo "  ${R}✖${N} $DOMINIO -> ${dns:-sin respuesta} (debería ser $ip)"; fi
+  cert="/etc/letsencrypt/live/$DOMINIO/cert.pem"
+  if [[ -r "$cert" ]]; then
+    echo "  ${V}✔${N} HTTPS: certificado vence $(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2)"
+  else
+    echo "  ${A}!${N} Sin certificado HTTPS (o ejecuta con sudo para verlo). Para crearlo: sudo smartrack-https"
+  fi
+fi
+echo "  Puertos escuchando:"
+ss -tlnp 2>/dev/null | awk 'NR>1 {print "    " $4}' | grep -E ':(22|80|443|1883|1880|9001)$' | sort -u
+
+echo "${B}Datos del ESP32 (vía Node-RED)${N}"
+json="$(curl -fs -m 3 http://127.0.0.1:1880/api/estado 2>/dev/null)"
+if [[ -z "$json" ]]; then
+  echo "  ${R}✖${N} Node-RED no responde en 127.0.0.1:1880"
+else
+  echo "$json" | jq -r '
+    "  Broker (Node-RED): " + (if .servidor.mqttConectado then "conectado" else "DESCONECTADO" end),
+    "  ESP32: " + (.esp32.conexion // "nunca se conectó") + (if .esp32.enLinea then " (enviando datos)" else " (sin datos recientes)" end),
+    "  Último mensaje: " + (if .esp32.ultimoMensaje then ((((.servidor.ts - .esp32.ultimoMensaje) / 1000) | floor | tostring) + " s atrás") else "-" end),
+    "  Temp: " + ((.datos.temperatura // "-") | tostring) + " °C | Hum: " + ((.datos.humedad // "-") | tostring) + " % | Puerta: " + (.datos.puerta // "-") + " | Alarma: " + (.alarma.estado // "-")'
+fi

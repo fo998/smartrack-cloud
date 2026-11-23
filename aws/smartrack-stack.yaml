@@ -1,0 +1,272 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SmartRack IoT - servidor en la nube con IP publica, nginx (reverse proxy con dominio),
+  Mosquitto, Node-RED y dashboard. Crea su propia VPC y se configura solo al arrancar
+  (descarga el repositorio y ejecuta instalar_smartrack.sh). Tarda unos 6-10 minutos.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: '1. Código del proyecto (repositorio GitHub)' }
+        Parameters: [RepoGit, RamaGit]
+      - Label: { default: '2. Dominio y HTTPS' }
+        Parameters: [Dominio, DuckDnsToken, EmailCertbot, CertbotPrueba]
+      - Label: { default: '3. Usuarios y contraseñas' }
+        Parameters: [UsuariosLinux, ClaveLinux, MqttUsuario, MqttClave, WebUsuario, WebClave, NodeRedUsuario, NodeRedClave]
+      - Label: { default: '4. Máquina virtual' }
+        Parameters: [TipoInstancia, ParLlaves, CidrSSH, ImagenUbuntu]
+    ParameterLabels:
+      RepoGit: { default: 'URL del repositorio (.git)' }
+      RamaGit: { default: 'Rama' }
+      Dominio: { default: 'Dominio (ej. smartrack-g1.duckdns.org)' }
+      DuckDnsToken: { default: 'Token de DuckDNS' }
+      EmailCertbot: { default: 'Correo para Let''s Encrypt' }
+      CertbotPrueba: { default: '¿Certificado de prueba (staging)?' }
+      UsuariosLinux: { default: 'Administradores Linux (sudo)' }
+      ClaveLinux: { default: 'Contraseña de los administradores' }
+      MqttUsuario: { default: 'Usuario MQTT del ESP32' }
+      MqttClave: { default: 'Clave MQTT del ESP32' }
+      WebUsuario: { default: 'Usuario del dashboard' }
+      WebClave: { default: 'Clave del dashboard' }
+      NodeRedUsuario: { default: 'Usuario del editor Node-RED' }
+      NodeRedClave: { default: 'Clave del editor Node-RED' }
+      TipoInstancia: { default: 'Tipo de instancia' }
+      ParLlaves: { default: 'Par de llaves SSH' }
+      CidrSSH: { default: 'Desde dónde se permite SSH' }
+      ImagenUbuntu: { default: 'Imagen (no cambiar)' }
+
+Parameters:
+  RepoGit:
+    Type: String
+    Default: 'https://github.com/TU_USUARIO/smartrack-cloud.git'
+    AllowedPattern: '^$|^https://\S+$'
+    Description: >-
+      Repositorio PÚBLICO con esta carpeta (sin config.env). Vacío = solo crea la red y la VM;
+      luego copias la carpeta por SSH y ejecutas el instalador a mano.
+  RamaGit:
+    Type: String
+    Default: main
+    AllowedPattern: '^[A-Za-z0-9._/-]+$'
+  Dominio:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$'
+    Description: Vacío = sin dominio ni HTTPS (se entra por la IP pública).
+  DuckDnsToken:
+    Type: String
+    Default: ''
+    NoEcho: true
+    AllowedPattern: '^[A-Za-z0-9-]*$'
+    Description: Si el dominio es de DuckDNS, el servidor lo actualiza solo con su IP.
+  EmailCertbot:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^@\s'']+@[^@\s'']+\.[^@\s'']+$'
+  CertbotPrueba:
+    Type: String
+    Default: 'no'
+    AllowedValues: ['no', 'si']
+    Description: '"si" no gasta el límite de 5 certificados por semana, pero el navegador lo marca como no seguro.'
+  UsuariosLinux:
+    Type: String
+    Default: frodriguez fpuma fzeballos atalavera
+    AllowedPattern: '^[a-z_][a-z0-9_-]{1,31}([ ,]+[a-z_][a-z0-9_-]{1,31})*$'
+    Description: Separados por espacio. Todos quedan con sudo; el login como root queda bloqueado.
+  ClaveLinux:
+    Type: String
+    NoEcho: true
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9_.@#%+=:,-]{6,64}$'
+    ConstraintDescription: '6 a 64 caracteres: letras, números y _ . @ # % + = : , -'
+    Description: Para SSH y sudo de todos. Vacía = solo se entra con la llave .pem.
+  MqttUsuario:
+    Type: String
+    Default: fzeballos
+    AllowedPattern: '^[A-Za-z0-9_.-]{1,64}$'
+    Description: Debe coincidir con MQTT_USER del código del ESP32.
+  MqttClave:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '^[A-Za-z0-9_.@#%+=:,-]{6,64}$'
+    ConstraintDescription: '6 a 64 caracteres: letras, números y _ . @ # % + = : , -'
+    Description: Debe coincidir con MQTT_PASSWORD del código del ESP32.
+  WebUsuario:
+    Type: String
+    Default: admin
+    AllowedPattern: '^[a-z_][a-z0-9_-]{1,31}$'
+  WebClave:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '^[A-Za-z0-9_.@#%+=:,-]{6,64}$'
+    ConstraintDescription: '6 a 64 caracteres: letras, números y _ . @ # % + = : , -'
+  NodeRedUsuario:
+    Type: String
+    Default: admin
+    AllowedPattern: '^[a-z_][a-z0-9_-]{1,31}$'
+  NodeRedClave:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '^[A-Za-z0-9_.@#%+=:,-]{6,64}$'
+    ConstraintDescription: '6 a 64 caracteres: letras, números y _ . @ # % + = : , -'
+  TipoInstancia:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium, t2.micro, t2.small, t2.medium]
+    Description: t3.small (2 GB RAM) instala más rápido; t3.micro también funciona.
+  ParLlaves:
+    Type: String
+    Default: vockey
+    Description: En AWS Academy existe "vockey" (labsuser.pem). Vacío = sin llave (usa EC2 Instance Connect).
+  CidrSSH:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$'
+    Description: 0.0.0.0/0 permite EC2 Instance Connect desde la consola. Para más seguridad pon tu IP/32.
+  ImagenUbuntu:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+Conditions:
+  TieneLlave: !Not [!Equals [!Ref ParLlaves, '']]
+  TieneDominio: !Not [!Equals [!Ref Dominio, '']]
+
+Resources:
+  # ------------------------------------------------------------------ red
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: smartrack-vpc }]
+
+  PuertaInternet:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: smartrack-igw }]
+
+  UnionPuertaVpc:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref PuertaInternet
+
+  SubredPublica:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: smartrack-subred-publica }]
+
+  TablaRutas:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: smartrack-rutas }]
+
+  RutaInternet:
+    Type: AWS::EC2::Route
+    DependsOn: UnionPuertaVpc
+    Properties:
+      RouteTableId: !Ref TablaRutas
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PuertaInternet
+
+  AsociacionSubred:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPublica
+      RouteTableId: !Ref TablaRutas
+
+  GrupoSeguridad:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SmartRack - SSH, HTTP, HTTPS y MQTT
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 22,   ToPort: 22,   CidrIp: !Ref CidrSSH,  Description: SSH }
+        - { IpProtocol: tcp, FromPort: 80,   ToPort: 80,   CidrIp: 0.0.0.0/0,     Description: HTTP (Let's Encrypt y redireccion) }
+        - { IpProtocol: tcp, FromPort: 443,  ToPort: 443,  CidrIp: 0.0.0.0/0,     Description: HTTPS dashboard y Node-RED }
+        - { IpProtocol: tcp, FromPort: 1883, ToPort: 1883, CidrIp: 0.0.0.0/0,     Description: MQTT del ESP32 }
+      Tags: [{ Key: Name, Value: smartrack-sg }]
+
+  # ------------------------------------------------------------- servidor
+  Servidor:
+    Type: AWS::EC2::Instance
+    DependsOn: RutaInternet
+    Properties:
+      ImageId: !Ref ImagenUbuntu
+      InstanceType: !Ref TipoInstancia
+      KeyName: !If [TieneLlave, !Ref ParLlaves, !Ref AWS::NoValue]
+      SubnetId: !Ref SubredPublica
+      SecurityGroupIds: [!Ref GrupoSeguridad]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 16, VolumeType: gp3, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: smartrack-servidor }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # SmartRack - se ejecuta una sola vez, al crear la instancia (cloud-init)
+          set -euo pipefail
+          exec > >(tee -a /var/log/smartrack-userdata.log) 2>&1
+          echo "=== SmartRack: arranque $(date) ==="
+          install -d -m 700 /etc/smartrack
+          cat > /etc/smartrack/config.env <<'FIN_CONFIG'
+          DOMINIO='${Dominio}'
+          DUCKDNS_TOKEN='${DuckDnsToken}'
+          EMAIL_CERTBOT='${EmailCertbot}'
+          CERTBOT_STAGING='${CertbotPrueba}'
+          CERTBOT_HSTS='no'
+          USUARIOS_SO='${UsuariosLinux}'
+          CLAVE_USUARIOS_SO='${ClaveLinux}'
+          SSH_CON_CLAVE='si'
+          MQTT_USUARIO='${MqttUsuario}'
+          MQTT_CLAVE='${MqttClave}'
+          MQTT_PERMITIR_ANONIMO='no'
+          WEB_USUARIO='${WebUsuario}'
+          WEB_CLAVE='${WebClave}'
+          NODERED_USUARIO='${NodeRedUsuario}'
+          NODERED_CLAVE='${NodeRedClave}'
+          ZONA_HORARIA='America/Lima'
+          ACTUALIZAR_SO='si'
+          FIREWALL_UFW='si'
+          ACTUALIZAR_FLOWS='no'
+          FIN_CONFIG
+          chmod 600 /etc/smartrack/config.env
+
+          REPO='${RepoGit}'
+          RAMA='${RamaGit}'
+          if [ -z "$REPO" ]; then
+            echo "Sin RepoGit: copia la carpeta smartrack-cloud por SSH y ejecuta:"
+            echo "  sudo bash smartrack-cloud/instalar_smartrack.sh /etc/smartrack/config.env"
+            exit 0
+          fi
+          export DEBIAN_FRONTEND=noninteractive GIT_TERMINAL_PROMPT=0
+          apt-get -o DPkg::Lock::Timeout=600 update -q
+          apt-get -o DPkg::Lock::Timeout=600 install -y -q git
+          rm -rf /opt/smartrack-cloud
+          git clone --depth 1 --branch "$RAMA" "$REPO" /opt/smartrack-cloud
+          bash /opt/smartrack-cloud/instalar_smartrack.sh /etc/smartrack/config.env
+
+Outputs:
+  IpPublica:
+    Description: IP pública del servidor (cambia si apagas y prendes la instancia)
+    Value: !GetAtt Servidor.PublicIp
+  Dashboard:
+    Description: Dashboard del SmartRack (listo cuando termine la instalación, ~6-10 min)
+    Value: !If [TieneDominio, !Sub 'https://${Dominio}/', !Sub 'http://${Servidor.PublicIp}/']
+  EditorNodeRed:
+    Description: Editor de Node-RED
+    Value: !If [TieneDominio, !Sub 'https://${Dominio}/admin/', !Sub 'http://${Servidor.PublicIp}/admin/']
+  MqttParaEsp32:
+    Description: Valor de MQTT_HOST en el ESP32 (puerto 1883)
+    Value: !If [TieneDominio, !Ref Dominio, !GetAtt Servidor.PublicIp]
+  ComandoSSH:
+    Description: Entra con tu usuario y la contraseña de administradores (o con la llave labsuser.pem)
+    Value: !Sub 'ssh TU_USUARIO@${Servidor.PublicIp}'
+  VerProgreso:
+    Description: Para ver la instalación en vivo (dentro del servidor)
+    Value: 'sudo tail -f /var/log/smartrack-instalacion.log'

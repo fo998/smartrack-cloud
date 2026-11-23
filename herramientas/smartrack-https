@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Obtiene (o reinstala) el certificado HTTPS de Let's Encrypt para DOMINIO.
+# Equivale a la línea de la guía:
+#   sudo certbot --nginx --agree-tos --redirect --email tu_correo -d tu_dominio
+# Uso:  sudo smartrack-https
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Ejecuta con sudo: sudo smartrack-https"; exit 1; }
+# shellcheck source=/dev/null
+source /etc/smartrack/config.env
+[[ -n "${DOMINIO:-}" ]] || { echo "No hay DOMINIO en /etc/smartrack/config.env"; exit 1; }
+command -v certbot >/dev/null || { echo "Falta certbot: sudo apt install certbot python3-certbot-nginx"; exit 1; }
+
+# 1) El dominio debe apuntar a este servidor, si no Let's Encrypt no puede validarlo
+ip="$(/usr/local/bin/smartrack-ip-publica || true)"
+echo "Comprobando que $DOMINIO apunte a ${ip:-este servidor} (máx. 3 min)..."
+dns=""
+for _ in $(seq 1 36); do
+  dns="$(dig +short A "$DOMINIO" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | tail -n1 || true)"
+  if [[ -n "$dns" && ( -z "$ip" || "$dns" == "$ip" ) ]]; then break; fi
+  sleep 5
+done
+if [[ -z "$dns" || ( -n "$ip" && "$dns" != "$ip" ) ]]; then
+  echo "✖ $DOMINIO apunta a '${dns:-nada}' pero este servidor es '${ip:-?}'."
+  echo "  Si usas DuckDNS: sudo smartrack-duckdns   (y revisa el token)"
+  exit 1
+fi
+echo "✔ DNS correcto ($dns)"
+
+# 2) Certificado. --keep-until-expiring reutiliza el que ya exista (no gasta el límite semanal)
+args=(--nginx --non-interactive --agree-tos --redirect --keep-until-expiring -d "$DOMINIO")
+if [[ -n "${EMAIL_CERTBOT:-}" ]]; then
+  args+=(-m "$EMAIL_CERTBOT")
+else
+  args+=(--register-unsafely-without-email)
+fi
+if [[ "${CERTBOT_STAGING:-no}" == "si" ]]; then
+  args+=(--test-cert)
+else
+  cert="/etc/letsencrypt/live/$DOMINIO/cert.pem"
+  # Pasar de un certificado de prueba (staging) a uno real
+  if [[ -f "$cert" ]] && openssl x509 -in "$cert" -noout -issuer | grep -qi staging; then
+    args+=(--force-renewal)
+  fi
+fi
+if [[ "${CERTBOT_HSTS:-no}" == "si" ]]; then
+  args+=(--hsts)
+fi
+# Nota: la guía usa también --staple-ocsp, pero Let's Encrypt dejó de ofrecer OCSP en 2025.
+
+certbot "${args[@]}"
+nginx -t && systemctl reload nginx
+echo "✔ Listo: https://$DOMINIO/"

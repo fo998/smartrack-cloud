@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Simula el ESP32 del SmartRack: publica los MISMOS tópicos que el .ino, cada 2 s.
+# Sirve para probar el broker, Node-RED y el dashboard sin tener el hardware.
+#
+# Uso:  sudo smartrack-simular            (Ctrl+C para detener)
+#       sudo smartrack-simular 120        (solo 120 segundos)
+#  Variables opcionales: SIM_HOST (por defecto 127.0.0.1), SIM_PUERTO (1883)
+#
+# Comportamiento: la temperatura sube y baja (pasa de 30 °C cada ~3 min),
+# la puerta se abre un rato cada 2 min y el comando APAGAR silencia la alarma
+# igual que el ESP32 real.
+set -euo pipefail
+if [[ -r /etc/smartrack/config.env ]]; then
+  # shellcheck source=/dev/null
+  source /etc/smartrack/config.env
+fi
+: "${MQTT_USUARIO:?Falta MQTT_USUARIO (ejecuta con sudo)}" "${MQTT_CLAVE:?Falta MQTT_CLAVE}"
+HOST="${SIM_HOST:-127.0.0.1}"
+PUERTO="${SIM_PUERTO:-1883}"
+DURACION="${1:-0}"
+UMBRAL=30.0
+COLA="$(mktemp)"      # aquí escribe mosquitto_sub los comandos recibidos
+
+pub() {   # pub <tópico> <valor> [-r]
+  mosquitto_pub -h "$HOST" -p "$PUERTO" -u "$MQTT_USUARIO" -P "$MQTT_CLAVE" \
+    -i "SmartRack-SIM-$$" -q 1 -t "$1" -m "$2" "${@:3}"
+}
+
+onoff() { if [[ $1 == true ]]; then echo ON; else echo OFF; fi; }
+
+terminar() {
+  pub SmartRack/Estado/Conexion DESCONECTADO -r || true
+  if [[ -n "${PID_SUB:-}" ]]; then kill "$PID_SUB" 2>/dev/null || true; fi
+  rm -f "$COLA"
+  echo; echo "Simulador detenido."
+}
+trap terminar EXIT
+trap 'exit 0' INT TERM
+
+# Escucha el comando de apagado (como recibirMQTT del .ino)
+mosquitto_sub -h "$HOST" -p "$PUERTO" -u "$MQTT_USUARIO" -P "$MQTT_CLAVE" \
+  -i "SmartRack-SIM-sub-$$" -t SmartRack/Control/Alarma >> "$COLA" &
+PID_SUB=$!
+
+pub SmartRack/Estado/Conexion CONECTADO -r
+pub SmartRack/Estado/IP "192.168.1.99 (simulado)" -r
+echo "Simulando ESP32 contra $HOST:$PUERTO como '$MQTT_USUARIO'... (Ctrl+C para detener)"
+
+alarma=false; reconocida=false; puerta_prev=""; inicio=$SECONDS
+while :; do
+  t=$((SECONDS - inicio))
+  if (( DURACION > 0 && t >= DURACION )); then break; fi
+
+  read -r temp hum <<<"$(awk -v t="$t" -v s="$RANDOM" 'BEGIN {
+      srand(s); pi = 3.14159265;
+      temp = 27.0 + 3.6 * sin(2*pi*t/180) + 0.4 * sin(2*pi*t/37) + (rand()-0.5)*0.3;
+      hum  = 58 - (temp-27)*2.2 + (rand()-0.5)*1.0;
+      printf "%.1f %.1f", temp, hum }')"
+  alta=$(awk -v a="$temp" -v u="$UMBRAL" 'BEGIN { print (a >= u) ? "true" : "false" }')
+
+  # Misma lógica de alarma que el ESP32
+  if [[ $alta == true && $reconocida == false ]]; then alarma=true; fi
+  if [[ $alta == false && $alarma == false ]]; then reconocida=false; fi
+  if grep -aqix '[[:space:]]*apagar[[:space:]]*' "$COLA"; then
+    : > "$COLA"
+    if [[ $alarma == true ]]; then
+      alarma=false; reconocida=true
+      pub SmartRack/Alarmas/UltimoSilenciadoPor MQTT -r
+      echo "  -> Alarma silenciada por MQTT"
+    fi
+  fi
+
+  if (( t % 120 >= 60 && t % 120 < 76 )); then puerta=ABIERTA; else puerta=CERRADA; fi
+  if [[ "$puerta" != "$puerta_prev" ]]; then pub SmartRack/Sensores/Puerta "$puerta" -r; puerta_prev=$puerta; fi
+
+  if [[ $alta == true ]]; then rojo=true; verde=false; else rojo=false; verde=true; fi
+  buzzer=$alarma
+  if (( (t / 3) % 2 == 1 )); then
+    l1="Puerta: $puerta"; l2="Alarma: APAGADA"
+  else
+    l1="Temp: $temp C";   l2="Hum: $hum %"
+  fi
+  if [[ $alarma == true ]]; then l2="ALARMA ACTIVA!"; fi
+
+  json="{\"dhtValido\":true,\"temperatura\":$temp,\"humedad\":$hum,\"puerta\":\"$puerta\",\"temperaturaAlta\":$alta,\"alarma\":$alarma,\"ledRojo\":$rojo,\"ledVerde\":$verde,\"buzzer\":$buzzer,\"botonFisico\":\"LIBRE\"}"
+  pub SmartRack/Sensores/JSON "$json" -r
+  pub SmartRack/Sensores/Temperatura "$temp" -r
+  pub SmartRack/Sensores/Humedad "$hum" -r
+  pub SmartRack/Sensores/DHT11/Estado OK -r
+  pub SmartRack/Actuadores/LedRojo "$(onoff $rojo)" -r
+  pub SmartRack/Actuadores/LedVerde "$(onoff $verde)" -r
+  pub SmartRack/Actuadores/Buzzer "$(onoff "$buzzer")" -r
+  pub SmartRack/Entradas/BotonFisico LIBRE -r
+  pub SmartRack/Alarmas/Estado "$([[ $alarma == true ]] && echo ACTIVA || echo APAGADA)" -r
+  pub SmartRack/Pantalla/Linea1 "$l1" -r
+  pub SmartRack/Pantalla/Linea2 "$l2" -r
+
+  printf '\r  t=%4ss  temp=%5s °C  hum=%5s %%  puerta=%-7s  alarma=%-5s ' "$t" "$temp" "$hum" "$puerta" "$alarma"
+  sleep 2
+done

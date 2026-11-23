@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Actualiza el dominio de DuckDNS con la IP pública actual del servidor.
+# Lo ejecuta solo un timer de systemd al arrancar y cada 5 minutos:
+#   systemctl list-timers smartrack-duckdns.timer
+#   journalctl -t smartrack-duckdns
+set -euo pipefail
+# shellcheck source=/dev/null
+source /etc/smartrack/config.env
+
+if [[ -z "${DUCKDNS_TOKEN:-}" || "${DOMINIO:-}" != *.duckdns.org ]]; then
+  echo "DuckDNS no está configurado (DOMINIO *.duckdns.org + DUCKDNS_TOKEN)."
+  exit 0
+fi
+[[ "$DUCKDNS_TOKEN" =~ ^[A-Za-z0-9-]+$ ]] || { echo "DUCKDNS_TOKEN con formato inválido"; exit 1; }
+
+sub="${DOMINIO%.duckdns.org}"
+sub="${sub##*.}"                       # a.b.duckdns.org -> b
+ip="$(/usr/local/bin/smartrack-ip-publica || true)"   # vacío = DuckDNS detecta la IP
+
+# La URL va por stdin (-K -) para que el token no aparezca en la lista de procesos
+resp="$(printf 'url = "https://www.duckdns.org/update?domains=%s&token=%s&ip=%s"\n' \
+          "$sub" "$DUCKDNS_TOKEN" "$ip" | curl -fsS -m 20 --retry 3 --retry-delay 5 -K - || true)"
+
+logger -t smartrack-duckdns "dominio=$sub.duckdns.org ip=${ip:-auto} respuesta=${resp:-sin respuesta}"
+echo "DuckDNS $sub.duckdns.org -> ${ip:-auto}: ${resp:-sin respuesta}"
+[[ "$resp" == OK* ]]

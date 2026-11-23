@@ -1,0 +1,422 @@
+[
+    {
+        "id": "5a17c0de0000a001",
+        "type": "tab",
+        "label": "SmartRack API",
+        "disabled": false,
+        "info": "Backend del dashboard SmartRack.\n\n1. Se suscribe a `SmartRack/#` y guarda estado, historial (24 h) y eventos.\n2. Expone una API HTTP en `/api/...` que nginx protege con usuario y clave.\n3. Envía `APAGAR` a `SmartRack/Control/Alarma` cuando lo piden desde el dashboard.\n\nEl historial y los eventos se guardan en disco (contexto `disco`)."
+    },
+    {
+        "id": "5a17c0de00000001",
+        "type": "mqtt-broker",
+        "name": "Mosquitto local",
+        "broker": "127.0.0.1",
+        "port": "1883",
+        "clientid": "nodered-smartrack",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "5a17c0de00000001",
+        "type": "comment",
+        "z": "5a17c0de0000a001",
+        "name": "1) Todo lo que publica el ESP32",
+        "info": "Suscripción a `SmartRack/#`. Activa el nodo debug para ver los mensajes en la barra lateral.",
+        "x": 190,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000002",
+        "type": "mqtt in",
+        "z": "5a17c0de0000a001",
+        "name": "SmartRack/#",
+        "topic": "SmartRack/#",
+        "qos": "1",
+        "datatype": "utf8",
+        "broker": "5a17c0de00000001",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 120,
+        "wires": [
+            [
+                "5a17c0de00000003",
+                "5a17c0de00000004"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000003",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Procesar mensaje",
+        "func": "// Recibe TODOS los mensajes SmartRack/# del ESP32.\n//  - guarda el último valor de cada tópico (flow.estado, en memoria)\n//  - arma el historial de temperatura/humedad (flow.historial, en disco)\n//  - registra eventos: puerta, alarma, conexión, botón (flow.eventos, en disco)\nconst INTERVALO_MS = 10 * 1000;   // un punto de historial cada 10 s\nconst MAX_PUNTOS   = 8640;        // 24 h a 10 s\nconst MAX_EVENTOS  = 300;\n\nconst ahora    = Date.now();\nconst topico   = msg.topic;\nconst valor    = String(msg.payload).trim();\nconst retenido = msg.retain === true;   // retenido = valor viejo guardado en el broker\n\nconst estado = flow.get('estado') || { topicos: {}, datos: null, datosTs: null, ultimoMensaje: null };\nconst previo = estado.topicos[topico] ? estado.topicos[topico].valor : undefined;\nestado.topicos[topico] = { valor: valor, ts: ahora, retenido: retenido };\nif (!retenido) estado.ultimoMensaje = ahora;\n\nfunction evento(tipo, texto, nivel) {\n    const eventos = flow.get('eventos', 'disco') || [];\n    eventos.push({ t: ahora, tipo: tipo, texto: texto, nivel: nivel || 'info' });\n    if (eventos.length > MAX_EVENTOS) eventos.splice(0, eventos.length - MAX_EVENTOS);\n    flow.set('eventos', eventos, 'disco');\n}\n\n// ---- JSON completo del ESP32 -> estado + historial\nif (topico === 'SmartRack/Sensores/JSON') {\n    let d = null;\n    try { d = JSON.parse(valor); } catch (e) { node.warn('JSON inválido: ' + valor); }\n    if (d && typeof d === 'object') {\n        estado.datos = d;\n        estado.datosTs = ahora;\n        if (!retenido && d.dhtValido === true && typeof d.temperatura === 'number') {\n            const hist = flow.get('historial', 'disco') || [];\n            const ult = hist.length ? hist[hist.length - 1] : null;\n            const a = d.alarma ? 1 : 0;\n            const p = d.puerta === 'ABIERTA' ? 1 : 0;\n            if (!ult || ahora - ult[0] >= INTERVALO_MS || ult[3] !== a || ult[4] !== p) {\n                const hum = typeof d.humedad === 'number' ? d.humedad : null;\n                hist.push([ahora, d.temperatura, hum, a, p]);\n                const limite = ahora - 24 * 3600 * 1000;\n                let quitar = 0;\n                while (quitar < hist.length && hist[quitar][0] < limite) quitar++;\n                if (hist.length - quitar > MAX_PUNTOS) quitar = hist.length - MAX_PUNTOS;\n                if (quitar > 0) hist.splice(0, quitar);\n                flow.set('historial', hist, 'disco');\n            }\n        }\n    }\n}\n\n// ---- Eventos (solo mensajes en vivo y cuando el valor cambia;\n//      la primera vez que llega un tópico no es un \"cambio\", salvo la conexión)\nconst ORIGEN = { BOTON_FISICO: 'el botón físico', MQTT: 'MQTT / dashboard' };\nif (!retenido) {\n    const cambio = previo !== valor && (previo !== undefined || topico === 'SmartRack/Estado/Conexion');\n    if (cambio) {\n        switch (topico) {\n            case 'SmartRack/Sensores/Puerta':\n                if (valor === 'ABIERTA') evento('puerta', 'Puerta abierta', 'aviso');\n                else evento('puerta', 'Puerta cerrada', 'ok');\n                break;\n            case 'SmartRack/Alarmas/Estado':\n                if (valor === 'ACTIVA') evento('alarma', 'Alarma activada: temperatura alta', 'critico');\n                else evento('alarma', 'Alarma apagada', 'ok');\n                break;\n            case 'SmartRack/Estado/Conexion':\n                if (valor === 'CONECTADO') evento('conexion', 'ESP32 conectado al broker', 'ok');\n                else evento('conexion', 'ESP32 desconectado', 'critico');\n                break;\n            case 'SmartRack/Sensores/DHT11/Estado':\n                if (valor === 'OK') evento('sensor', 'Sensor DHT11 leyendo de nuevo', 'ok');\n                else evento('sensor', 'Sensor DHT11 sin lectura', 'aviso');\n                break;\n        }\n    }\n    if (topico === 'SmartRack/Alarmas/UltimoSilenciadoPor') {\n        evento('alarma', 'Alarma silenciada desde ' + (ORIGEN[valor] || valor), 'info');\n    }\n    if (topico === 'SmartRack/Eventos/BotonFisico') {\n        evento('boton', 'Botón físico presionado', 'info');\n    }\n}\n\nflow.set('estado', estado);\nreturn null;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 120,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "5a17c0de00000004",
+        "type": "debug",
+        "z": "5a17c0de0000a001",
+        "name": "Ver mensajes MQTT",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 390,
+        "y": 170,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000005",
+        "type": "status",
+        "z": "5a17c0de0000a001",
+        "name": "Estado del broker",
+        "scope": [
+            "5a17c0de00000002"
+        ],
+        "x": 160,
+        "y": 220,
+        "wires": [
+            [
+                "5a17c0de00000006"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000006",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Guardar estado broker",
+        "func": "// Guarda si Node-RED está conectado a Mosquitto (lo muestra el dashboard)\nflow.set('mqttConectado', msg.status && msg.status.fill === 'green');\nreturn null;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 220,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "5a17c0de00000007",
+        "type": "comment",
+        "z": "5a17c0de0000a001",
+        "name": "2) API del dashboard (nginx -> /api/...)",
+        "info": "Todas las rutas pasan por nginx con login básico (htpasswd).",
+        "x": 210,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000008",
+        "type": "http in",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "url": "/api/estado",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 150,
+        "y": 360,
+        "wires": [
+            [
+                "5a17c0de00000009"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000009",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Estado actual",
+        "func": "// GET /api/estado  ->  último estado conocido del rack\nconst est = flow.get('estado') || { topicos: {} };\nconst ahora = Date.now();\nconst v = (t) => est.topicos[t] ? est.topicos[t].valor : null;\nconst SIN_DATOS_MS = 15000;   // el ESP32 publica cada 2 s\nconst conexion = v('SmartRack/Estado/Conexion');\nconst recibiendo = !!est.ultimoMensaje && (ahora - est.ultimoMensaje) < SIN_DATOS_MS;\n\nmsg.payload = {\n    servidor: { ts: ahora, mqttConectado: flow.get('mqttConectado') === true },\n    esp32: {\n        conexion: conexion,\n        ip: v('SmartRack/Estado/IP'),\n        enLinea: conexion === 'CONECTADO' && recibiendo,\n        ultimoMensaje: est.ultimoMensaje || null\n    },\n    datos: est.datos || null,\n    datosTs: est.datosTs || null,\n    alarma: {\n        estado: v('SmartRack/Alarmas/Estado'),\n        ultimoSilenciadoPor: v('SmartRack/Alarmas/UltimoSilenciadoPor')\n    },\n    lcd: [v('SmartRack/Pantalla/Linea1'), v('SmartRack/Pantalla/Linea2')],\n    topicos: est.topicos\n};\nmsg.headers = { 'Cache-Control': 'no-store' };\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 370,
+        "y": 360,
+        "wires": [
+            [
+                "5a17c0de0000000a"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de0000000a",
+        "type": "http response",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 570,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de0000000b",
+        "type": "http in",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "url": "/api/historial",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 160,
+        "y": 420,
+        "wires": [
+            [
+                "5a17c0de0000000c"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de0000000c",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Historial",
+        "func": "// GET /api/historial?horas=1  ->  puntos [t, temperatura, humedad, alarma, puertaAbierta]\nconst MAX_PUNTOS = 720;   // se promedian para no mandar miles de puntos al navegador\nconst hist = flow.get('historial', 'disco') || [];\nlet horas = parseFloat(msg.req.query.horas);\nif (!isFinite(horas) || horas <= 0) horas = 1;\nhoras = Math.min(horas, 24);\nconst hasta = Date.now();\nconst desde = hasta - horas * 3600 * 1000;\n\nlet lo = 0, hi = hist.length;            // búsqueda binaria del primer punto >= desde\nwhile (lo < hi) { const m = (lo + hi) >> 1; if (hist[m][0] < desde) lo = m + 1; else hi = m; }\nlet puntos = hist.slice(lo);\n\nif (puntos.length > MAX_PUNTOS) {\n    const paso = Math.ceil(puntos.length / MAX_PUNTOS);\n    const r1 = (x) => Math.round(x * 10) / 10;\n    const reducido = [];\n    for (let i = 0; i < puntos.length; i += paso) {\n        const g = puntos.slice(i, i + paso);\n        let st = 0, nt = 0, sh = 0, nh = 0, a = 0, p = 0;\n        for (const q of g) {\n            if (typeof q[1] === 'number') { st += q[1]; nt++; }\n            if (typeof q[2] === 'number') { sh += q[2]; nh++; }\n            a = Math.max(a, q[3]); p = Math.max(p, q[4]);\n        }\n        reducido.push([g[0][0], nt ? r1(st / nt) : null, nh ? r1(sh / nh) : null, a, p]);\n    }\n    puntos = reducido;\n}\nmsg.payload = { desde: desde, hasta: hasta, horas: horas,\n                columnas: ['t', 'temperatura', 'humedad', 'alarma', 'puertaAbierta'], puntos: puntos };\nmsg.headers = { 'Cache-Control': 'no-store' };\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 420,
+        "wires": [
+            [
+                "5a17c0de0000000d"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de0000000d",
+        "type": "http response",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 570,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de0000000e",
+        "type": "http in",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "url": "/api/historial.csv",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 170,
+        "y": 480,
+        "wires": [
+            [
+                "5a17c0de0000000f"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de0000000f",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Historial CSV",
+        "func": "// GET /api/historial.csv?horas=24  ->  descarga CSV (hora local del servidor)\nconst hist = flow.get('historial', 'disco') || [];\nlet horas = parseFloat(msg.req.query.horas);\nif (!isFinite(horas) || horas <= 0) horas = 24;\nconst desde = Date.now() - Math.min(horas, 24) * 3600 * 1000;\nconst dos = (n) => String(n).padStart(2, '0');\nconst fecha = (t) => { const d = new Date(t);\n    return d.getFullYear() + '-' + dos(d.getMonth() + 1) + '-' + dos(d.getDate()) + ' ' +\n           dos(d.getHours()) + ':' + dos(d.getMinutes()) + ':' + dos(d.getSeconds()); };\nconst lineas = ['fecha_hora,temperatura_c,humedad_pct,alarma_activa,puerta_abierta'];\nfor (const p of hist) {\n    if (p[0] < desde) continue;\n    lineas.push([fecha(p[0]), p[1] ?? '', p[2] ?? '', p[3], p[4]].join(','));\n}\nconst ahora = new Date();\nconst nombre = 'smartrack_' + ahora.getFullYear() + dos(ahora.getMonth() + 1) + dos(ahora.getDate()) +\n               '_' + dos(ahora.getHours()) + dos(ahora.getMinutes()) + '.csv';\nmsg.payload = lineas.join('\\n') + '\\n';\nmsg.headers = { 'Content-Type': 'text/csv; charset=utf-8',\n                'Content-Disposition': 'attachment; filename=\"' + nombre + '\"',\n                'Cache-Control': 'no-store' };\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 480,
+        "wires": [
+            [
+                "5a17c0de00000010"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000010",
+        "type": "http response",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 570,
+        "y": 480,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000011",
+        "type": "http in",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "url": "/api/eventos",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 150,
+        "y": 540,
+        "wires": [
+            [
+                "5a17c0de00000012"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000012",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Eventos",
+        "func": "// GET /api/eventos  ->  últimos 100 eventos, el más reciente primero\nconst eventos = flow.get('eventos', 'disco') || [];\nmsg.payload = eventos.slice(-100).reverse();\nmsg.headers = { 'Cache-Control': 'no-store' };\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 540,
+        "wires": [
+            [
+                "5a17c0de00000013"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000013",
+        "type": "http response",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 570,
+        "y": 540,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000014",
+        "type": "comment",
+        "z": "5a17c0de0000a001",
+        "name": "3) Apagar la alarma desde el dashboard",
+        "info": "Publica `APAGAR` en `SmartRack/Control/Alarma`; el ESP32 lo recibe en `recibirMQTT()`.",
+        "x": 220,
+        "y": 620,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000015",
+        "type": "http in",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "url": "/api/alarma/apagar",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 680,
+        "wires": [
+            [
+                "5a17c0de00000016"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000016",
+        "type": "function",
+        "z": "5a17c0de0000a001",
+        "name": "Orden APAGAR",
+        "func": "// POST /api/alarma/apagar  ->  publica APAGAR en SmartRack/Control/Alarma\n// La cabecera X-SmartRack evita que otra página web dispare la orden (CSRF).\nif (msg.req.headers['x-smartrack'] !== '1') {\n    msg.statusCode = 403;\n    msg.payload = { ok: false, error: 'Falta la cabecera X-SmartRack' };\n    return [null, msg];\n}\nconst usuario = msg.req.headers['x-usuario'] || 'dashboard';\nconst eventos = flow.get('eventos', 'disco') || [];\neventos.push({ t: Date.now(), tipo: 'alarma', texto: 'Orden APAGAR enviada desde el dashboard (' + usuario + ')', nivel: 'info' });\nif (eventos.length > 300) eventos.splice(0, eventos.length - 300);\nflow.set('eventos', eventos, 'disco');\n\nconst orden = { payload: 'APAGAR' };\nmsg.payload = { ok: true, enviado: 'APAGAR', mqttConectado: flow.get('mqttConectado') === true };\nmsg.headers = { 'Cache-Control': 'no-store' };\nreturn [orden, msg];\n",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 680,
+        "wires": [
+            [
+                "5a17c0de00000017"
+            ],
+            [
+                "5a17c0de00000018"
+            ]
+        ]
+    },
+    {
+        "id": "5a17c0de00000017",
+        "type": "mqtt out",
+        "z": "5a17c0de0000a001",
+        "name": "SmartRack/Control/Alarma",
+        "topic": "SmartRack/Control/Alarma",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "5a17c0de00000001",
+        "x": 640,
+        "y": 660,
+        "wires": []
+    },
+    {
+        "id": "5a17c0de00000018",
+        "type": "http response",
+        "z": "5a17c0de0000a001",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 590,
+        "y": 720,
+        "wires": []
+    }
+]

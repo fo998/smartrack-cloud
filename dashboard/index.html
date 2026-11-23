@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartRack · Monitoreo</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='22' height='26' rx='3' fill='%232a78d6'/%3E%3Crect x='9' y='8' width='14' height='4' rx='1' fill='white'/%3E%3Crect x='9' y='14' width='14' height='4' rx='1' fill='white'/%3E%3Crect x='9' y='20' width='14' height='4' rx='1' fill='white'/%3E%3C/svg%3E">
+<style>
+/* ======================================================================
+   Tokens (paleta validada: superficie, tintas, serie y estados)
+   ====================================================================== */
+:root {
+  color-scheme: light;
+  --pagina: #f9f9f7;  --superficie: #fcfcfb;  --superficie-2: #f2f1ed;
+  --tinta: #0b0b0b;   --tinta-2: #52514e;     --tinta-3: #898781;
+  --grilla: #e1e0d9;  --eje: #c3c2b7;         --borde: rgba(11, 11, 11, .10);
+  --serie-1: #2a78d6; --serie-2: #eb6834;     --pista: #cde2fb;
+  --bueno: #0ca30c;   --aviso: #fab219;       --critico: #d03b3b;
+  --bueno-texto: #006300;
+  --lcd-fondo: #1f45bd; --lcd-texto: #eaf1ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --pagina: #0d0d0d;  --superficie: #1a1a19;  --superficie-2: #242423;
+    --tinta: #f0efec;   --tinta-2: #c3c2b7;     --tinta-3: #898781;
+    --grilla: #2c2c2a;  --eje: #383835;         --borde: rgba(255, 255, 255, .10);
+    --serie-1: #3987e5; --serie-2: #d95926;     --pista: #184f95;
+    --bueno-texto: #0ca30c;
+    --lcd-fondo: #18389b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --pagina: #0d0d0d;  --superficie: #1a1a19;  --superficie-2: #242423;
+  --tinta: #f0efec;   --tinta-2: #c3c2b7;     --tinta-3: #898781;
+  --grilla: #2c2c2a;  --eje: #383835;         --borde: rgba(255, 255, 255, .10);
+  --serie-1: #3987e5; --serie-2: #d95926;     --pista: #184f95;
+  --bueno-texto: #0ca30c;
+  --lcd-fondo: #18389b;
+}
+
+/* ====================================================================== */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--pagina); color: var(--tinta);
+  font-size: 14px; line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; }
+.app { max-width: 1280px; margin: 0 auto; padding: 20px 24px 40px; }
+.oculto-a11y { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }
+.ico { width: 16px; height: 16px; flex: none; display: inline-block; vertical-align: -3px; }
+
+/* ---------- cabecera ---------- */
+.cab { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.cab-marca { display: flex; align-items: center; gap: 12px; }
+.logo { width: 36px; height: 36px; color: var(--serie-1); }
+.cab h1 { font-size: 20px; line-height: 1.2; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+.cab-sub { margin: 0; color: var(--tinta-2); font-size: 13px; }
+.cab-estado { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cab-act { color: var(--tinta-2); font-size: 13px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px 5px 9px; border-radius: 999px;
+        background: var(--superficie); border: 1px solid var(--borde); font-weight: 550; font-size: 13px; }
+.pill-demo { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px;
+             border-radius: 999px; background: var(--superficie-2); color: var(--tinta-2); }
+.btn-ico { width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 8px;
+           border: 1px solid var(--borde); background: var(--superficie); cursor: pointer; color: var(--tinta-2); }
+.btn-ico:hover { color: var(--tinta); background: var(--superficie-2); }
+
+/* ---------- banner de alarma ---------- */
+.banner { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 12px; margin-bottom: 16px; }
+.banner[hidden] { display: none; }
+.banner .ico { width: 22px; height: 22px; }
+.banner-txt { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.banner-txt strong { font-size: 15px; }
+.banner.critico { background: var(--critico); color: #fff; }
+.banner.aviso { background: var(--superficie); border: 1px solid var(--borde); border-left: 4px solid var(--aviso); }
+.banner.aviso .banner-txt span { color: var(--tinta-2); }
+.btn-banner { border: 1.5px solid rgba(255, 255, 255, .85); background: transparent; color: #fff; padding: 8px 14px;
+              border-radius: 8px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn-banner:hover { background: rgba(255, 255, 255, .14); }
+
+/* ---------- tarjetas ---------- */
+.card { background: var(--superficie); border: 1px solid var(--borde); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+.card h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.card-cab { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.card-sub { color: var(--tinta-2); font-size: 12.5px; }
+
+/* ---------- indicadores ---------- */
+.tiles { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.tile { display: flex; flex-direction: column; gap: 6px; }
+.tile-label { color: var(--tinta-2); font-size: 13px; font-weight: 500; }
+.tile-valor { font-weight: 620; letter-spacing: -.02em; line-height: 1.05; }
+.tile-valor .unidad { font-size: .45em; font-weight: 500; color: var(--tinta-2); margin-left: 4px; letter-spacing: 0; }
+.tile-hero .tile-valor { font-size: 52px; }
+.tile-medio .tile-valor { font-size: 36px; }
+.tile-texto .tile-valor { font-size: 26px; display: flex; align-items: center; gap: 8px; padding: 6px 0 4px; }
+.tile-texto .tile-valor .ico { width: 22px; height: 22px; }
+.tile-estado { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--tinta-2); min-height: 20px; }
+.tile.viejo .tile-valor { opacity: .5; }
+.medidor { position: relative; height: 8px; border-radius: 999px; background: var(--pista); margin-top: 6px; }
+.medidor.s2 { background: color-mix(in srgb, var(--serie-2) 24%, var(--superficie)); }
+.medidor-relleno { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--serie-1); transition: width .4s; }
+.medidor-marca { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--tinta); border-radius: 1px; }
+.medidor-escala { display: flex; justify-content: space-between; font-size: 11px; color: var(--tinta-3); margin-top: 4px; }
+.btn { border: 1px solid var(--borde); background: var(--superficie-2); padding: 7px 12px; border-radius: 8px;
+       font-weight: 600; cursor: pointer; align-self: flex-start; margin-top: 2px; }
+.btn:hover:not(:disabled) { border-color: var(--tinta-3); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-peligro:not(:disabled) { background: var(--critico); border-color: var(--critico); color: #fff; }
+
+/* ---------- filtros ---------- */
+.filtros { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 12px; }
+.seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--superficie-2); border: 1px solid var(--borde); }
+.seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: 7px; cursor: pointer; color: var(--tinta-2); font-weight: 550; }
+.seg button[aria-pressed="true"] { background: var(--superficie); color: var(--tinta); box-shadow: 0 0 0 1px var(--borde); }
+.seg button:hover:not([aria-pressed="true"]) { color: var(--tinta); }
+.filtros .espacio { flex: 1; }
+.enlace { color: var(--tinta-2); text-decoration: none; font-weight: 550; display: inline-flex; align-items: center; gap: 6px; }
+.enlace:hover { color: var(--tinta); text-decoration: underline; }
+
+/* ---------- gráficos ---------- */
+.graficos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.graficos[hidden], .tabla-card[hidden] { display: none; }
+.grafico { position: relative; width: 100%; transition: opacity .2s; }
+.grafico.cargando { opacity: .55; }
+.grafico svg { display: block; width: 100%; height: auto; overflow: visible; }
+.grafico svg:focus { outline: none; }
+.grafico svg:focus-visible { outline: 2px solid var(--serie-1); outline-offset: 4px; border-radius: 4px; }
+.g-grilla { stroke: var(--grilla); stroke-width: 1; shape-rendering: crispEdges; }
+.g-base { stroke: var(--eje); stroke-width: 1; shape-rendering: crispEdges; }
+.g-tick { fill: var(--tinta-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.g-linea { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.g-area { stroke: none; opacity: .10; }
+.s1 .g-linea { stroke: var(--serie-1); }  .s1 .g-area, .s1 .g-punto { fill: var(--serie-1); }
+.s2 .g-linea { stroke: var(--serie-2); }  .s2 .g-area, .s2 .g-punto { fill: var(--serie-2); }
+.g-punto { stroke: var(--superficie); stroke-width: 2; }
+.g-etiqueta { fill: var(--tinta); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.g-umbral { stroke: var(--critico); stroke-width: 1; shape-rendering: crispEdges; }
+.g-umbral-txt { fill: var(--tinta-2); font-size: 11px; paint-order: stroke; stroke: var(--superficie); stroke-width: 4px; stroke-linejoin: round; }
+.g-banda { fill: var(--critico); opacity: .12; }
+.g-cruz { stroke: var(--tinta-3); stroke-width: 1; shape-rendering: crispEdges; }
+.g-vacio { fill: var(--tinta-3); font-size: 13px; }
+.leyenda-anot { display: inline-flex; align-items: center; gap: 6px; color: var(--tinta-2); font-size: 12.5px; }
+.leyenda-anot i { width: 12px; height: 12px; border-radius: 3px; background: var(--critico); opacity: .35; display: inline-block; }
+.leyenda-anot b { width: 14px; height: 0; border-top: 1px solid var(--critico); display: inline-block; }
+
+.tooltip { position: fixed; z-index: 20; pointer-events: none; min-width: 170px; padding: 9px 11px; border-radius: 9px;
+           background: var(--superficie); border: 1px solid var(--borde); box-shadow: 0 6px 22px rgba(0, 0, 0, .14); font-size: 12.5px; }
+.tooltip[hidden] { display: none; }
+.tt-hora { color: var(--tinta-2); margin-bottom: 5px; font-variant-numeric: tabular-nums; }
+.tt-fila { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.tt-fila strong { font-size: 14px; font-variant-numeric: tabular-nums; min-width: 62px; }
+.tt-fila span { color: var(--tinta-2); }
+.tt-clave { width: 14px; height: 2px; border-radius: 1px; flex: none; }
+
+/* ---------- tabla de historial / eventos ---------- */
+.tabla-card { margin-bottom: 16px; }
+.tabla-scroll { max-height: 420px; overflow: auto; border-top: 1px solid var(--grilla); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--tinta-2); padding: 8px 10px; position: sticky; top: 0; background: var(--superficie); border-bottom: 1px solid var(--grilla); }
+td { padding: 7px 10px; border-bottom: 1px solid var(--grilla); }
+td.der, th.der { text-align: right; }
+.nota { color: var(--tinta-3); font-size: 12px; margin: 8px 0 0; }
+
+/* ---------- paneles inferiores ---------- */
+.paneles { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.paneles .ancho { grid-column: 1 / -1; }
+.lista { list-style: none; margin: 0; padding: 0; }
+.lista li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--grilla); }
+.lista li:last-child { border-bottom: 0; }
+.lista .nombre { color: var(--tinta-2); }
+.lista .valor { display: inline-flex; align-items: center; gap: 7px; font-weight: 550; }
+.led { width: 12px; height: 12px; border-radius: 50%; background: var(--superficie-2); box-shadow: inset 0 0 0 1px var(--borde); flex: none; }
+.led.on-rojo { background: var(--critico); box-shadow: 0 0 0 3px color-mix(in srgb, var(--critico) 22%, transparent); }
+.led.on-verde { background: var(--bueno); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bueno) 22%, transparent); }
+
+.lcd { background: var(--lcd-fondo); border-radius: 8px; padding: 14px 16px; border: 6px solid #1a1a19;
+       font-family: ui-monospace, "Cascadia Mono", "Consolas", "Liberation Mono", monospace; color: var(--lcd-texto);
+       font-size: clamp(14px, 1.65vw, 19px); letter-spacing: .08em; line-height: 1.5; white-space: pre; overflow: hidden;
+       text-shadow: 0 0 6px rgba(200, 220, 255, .35); }
+.lcd.apagada { filter: grayscale(.8) brightness(.6); }
+.lcd-pie { color: var(--tinta-3); font-size: 12px; margin-top: 8px; }
+
+.datos { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; }
+.datos dt { color: var(--tinta-2); }
+.datos dd { margin: 0; text-align: right; font-weight: 550; display: flex; justify-content: flex-end; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+
+.ev-tabla td:first-child { white-space: nowrap; color: var(--tinta-2); width: 1%; }
+.ev-txt { display: inline-flex; align-items: center; gap: 8px; }
+.vacio { color: var(--tinta-3); padding: 14px 0 4px; }
+
+.pie { margin-top: 22px; color: var(--tinta-3); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.pie a { color: var(--tinta-2); }
+.pie code { font-family: ui-monospace, monospace; font-size: 12px; }
+
+.aviso-flotante { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 30; background: var(--tinta); color: var(--pagina);
+                  padding: 10px 16px; border-radius: 10px; font-weight: 550; box-shadow: 0 8px 24px rgba(0, 0, 0, .2); }
+.aviso-flotante[hidden] { display: none; }
+
+@media (max-width: 1080px) {
+  .tiles { grid-template-columns: 1fr 1fr; }
+  .paneles { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 760px) {
+  .app { padding: 14px 12px 32px; }
+  .graficos, .paneles { grid-template-columns: 1fr; }
+  .tile-hero .tile-valor { font-size: 48px; }
+}
+@media (max-width: 480px) { .tiles { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="cab">
+    <div class="cab-marca">
+      <svg class="logo" viewBox="0 0 36 36" aria-hidden="true">
+        <rect x="6" y="2.5" width="24" height="31" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>
+        <rect x="10" y="8" width="16" height="5" rx="1.5" fill="currentColor" opacity=".9"/>
+        <rect x="10" y="15.5" width="16" height="5" rx="1.5" fill="currentColor" opacity=".6"/>
+        <rect x="10" y="23" width="16" height="5" rx="1.5" fill="currentColor" opacity=".35"/>
+      </svg>
+      <div>
+        <h1>SmartRack</h1>
+        <p class="cab-sub">Monitoreo del rack en tiempo real · <span id="host"></span></p>
+      </div>
+    </div>
+    <div class="cab-estado">
+      <span class="pill" id="pill"><span>Conectando…</span></span>
+      <span class="cab-act num" id="actualizado"></span>
+      <button class="btn-ico" id="btnTema" type="button" title="Cambiar tema claro / oscuro" aria-label="Cambiar tema claro u oscuro">
+        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section id="banner" class="banner" hidden>
+    <span id="bannerIco"></span>
+    <div class="banner-txt"><strong id="bannerTit"></strong><span id="bannerDet"></span></div>
+    <button id="bannerBtn" class="btn-banner" type="button" hidden>Apagar alarma</button>
+  </section>
+
+  <section class="tiles" aria-label="Indicadores principales">
+    <article class="card tile tile-hero" id="tTemp">
+      <span class="tile-label">Temperatura</span>
+      <span class="tile-valor"><span id="vTemp">–</span><span class="unidad">°C</span></span>
+      <span class="tile-estado" id="eTemp"></span>
+      <div class="medidor" aria-hidden="true"><div class="medidor-relleno" id="mTemp" style="width:0"></div><div class="medidor-marca" id="mTempUmbral"></div></div>
+      <div class="medidor-escala num" aria-hidden="true"><span>15 °C</span><span id="mTempUmbralTxt">30 °C</span><span>40 °C</span></div>
+    </article>
+    <article class="card tile tile-medio" id="tHum">
+      <span class="tile-label">Humedad relativa</span>
+      <span class="tile-valor"><span id="vHum">–</span><span class="unidad">%</span></span>
+      <span class="tile-estado" id="eHum">Sensor DHT11</span>
+      <div class="medidor s2" aria-hidden="true"><div class="medidor-relleno" id="mHum" style="width:0;background:var(--serie-2)"></div></div>
+      <div class="medidor-escala num" aria-hidden="true"><span>0 %</span><span>50 %</span><span>100 %</span></div>
+    </article>
+    <article class="card tile tile-texto" id="tPuerta">
+      <span class="tile-label">Puerta del rack</span>
+      <span class="tile-valor" id="vPuerta">–</span>
+      <span class="tile-estado" id="ePuerta">Sensor magnético</span>
+    </article>
+    <article class="card tile tile-texto" id="tAlarma">
+      <span class="tile-label">Alarma</span>
+      <span class="tile-valor" id="vAlarma">–</span>
+      <span class="tile-estado" id="eAlarma"></span>
+      <button class="btn" id="btnApagar" type="button" disabled>Apagar alarma</button>
+    </article>
+  </section>
+
+  <div class="filtros" role="toolbar" aria-label="Rango de tiempo y vista">
+    <div class="seg" id="segRango" aria-label="Rango de tiempo">
+      <button type="button" data-horas="0.25">15 min</button>
+      <button type="button" data-horas="1">1 h</button>
+      <button type="button" data-horas="6">6 h</button>
+      <button type="button" data-horas="24">24 h</button>
+    </div>
+    <div class="seg" id="segVista" aria-label="Vista">
+      <button type="button" data-vista="grafico">Gráficos</button>
+      <button type="button" data-vista="tabla">Tabla</button>
+    </div>
+    <span class="espacio"></span>
+    <a class="enlace" id="lnkCsv" href="api/historial.csv?horas=24" download>
+      <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0 3-3m-3 3L5 7M3 12.5h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Descargar CSV (24 h)
+    </a>
+  </div>
+
+  <section class="graficos" id="graficos">
+    <article class="card">
+      <div class="card-cab">
+        <h2>Temperatura <span class="card-sub">°C</span></h2>
+        <span class="leyenda-anot"><b></b><span>Umbral <span id="umbralTxt">30</span> °C</span><i style="margin-left:8px"></i><span>Alarma activa</span></span>
+      </div>
+      <div class="grafico" id="gTemp"></div>
+    </article>
+    <article class="card">
+      <div class="card-cab">
+        <h2>Humedad <span class="card-sub">% relativa</span></h2>
+      </div>
+      <div class="grafico" id="gHum"></div>
+    </article>
+  </section>
+
+  <section class="card tabla-card" id="tablaCard" hidden>
+    <div class="card-cab"><h2>Historial</h2><span class="card-sub" id="tablaSub"></span></div>
+    <div class="tabla-scroll">
+      <table>
+        <thead><tr><th>Hora</th><th class="der">Temperatura (°C)</th><th class="der">Humedad (%)</th><th>Alarma</th><th>Puerta</th></tr></thead>
+        <tbody id="tablaCuerpo"></tbody>
+      </table>
+    </div>
+    <p class="nota" id="tablaNota"></p>
+  </section>
+
+  <section class="paneles">
+    <article class="card">
+      <div class="card-cab"><h2>Actuadores y entradas</h2></div>
+      <ul class="lista">
+        <li><span class="nombre">LED rojo (temperatura alta)</span><span class="valor" id="aRojo">–</span></li>
+        <li><span class="nombre">LED verde (normal)</span><span class="valor" id="aVerde">–</span></li>
+        <li><span class="nombre">Buzzer</span><span class="valor" id="aBuzzer">–</span></li>
+        <li><span class="nombre">Botón físico</span><span class="valor" id="aBoton">–</span></li>
+        <li><span class="nombre">Sensor DHT11</span><span class="valor" id="aDht">–</span></li>
+      </ul>
+    </article>
+    <article class="card">
+      <div class="card-cab"><h2>Pantalla LCD 16×2</h2></div>
+      <div class="lcd" id="lcd" aria-label="Contenido de la pantalla LCD"></div>
+      <div class="lcd-pie">Lo mismo que muestra la pantalla física del rack.</div>
+    </article>
+    <article class="card">
+      <div class="card-cab"><h2>Dispositivo y conexión</h2></div>
+      <dl class="datos">
+        <dt>ESP32 (MQTT)</dt><dd id="dConexion">–</dd>
+        <dt>IP local del ESP32</dt><dd id="dIp" class="num">–</dd>
+        <dt>Último mensaje</dt><dd id="dUltimo" class="num">–</dd>
+        <dt>Node-RED ↔ Mosquitto</dt><dd id="dBroker">–</dd>
+        <dt>Último silenciado por</dt><dd id="dSilencio">–</dd>
+      </dl>
+    </article>
+    <article class="card ancho">
+      <div class="card-cab"><h2>Eventos recientes</h2><span class="card-sub">Puerta, alarma, conexión y botón</span></div>
+      <div class="tabla-scroll" style="max-height:300px">
+        <table class="ev-tabla"><tbody id="eventos"></tbody></table>
+      </div>
+    </article>
+  </section>
+
+  <footer class="pie">
+    <span>Editor Node-RED: <a href="admin/">/admin/</a></span>
+    <span>MQTT: <code id="pieMqtt"></code></span>
+    <span>WebSocket: <code id="pieWs"></code></span>
+    <span>API: <a href="api/estado">/api/estado</a></span>
+  </footer>
+</div>
+
+<div class="tooltip" id="tooltip" hidden></div>
+<div class="aviso-flotante" id="avisoFlotante" role="status" hidden></div>
+<div class="oculto-a11y" id="anuncio" aria-live="polite"></div>
+<noscript><p style="padding:20px">Este dashboard necesita JavaScript.</p></noscript>
+
+<script>
+'use strict';
+/* =====================================================================
+   SmartRack · Dashboard
+   Lee la API que expone Node-RED (vía nginx):
+     GET  api/estado          último estado del ESP32
+     GET  api/historial?horas historial (24 h máx.)
+     GET  api/eventos         últimos eventos
+     POST api/alarma/apagar   publica APAGAR en SmartRack/Control/Alarma
+   Abre con ?demo para ver datos simulados sin servidor.
+   ===================================================================== */
+const UMBRAL = 30;
+const PERIODO_ESTADO = 2000, PERIODO_HISTORIAL = 10000, PERIODO_EVENTOS = 5000;
+const DEMO = window.SMARTRACK_DEMO === true || location.protocol === 'file:' || new URLSearchParams(location.search).has('demo');
+
+const $ = (id) => document.getElementById(id);
+const r1 = (x) => Math.round(x * 10) / 10;
+const dos = (n) => String(n).padStart(2, '0');
+const fmt1 = (x) => (typeof x === 'number' && isFinite(x)) ? x.toFixed(1) : '–';
+const horaMin = (t) => { const d = new Date(t); return dos(d.getHours()) + ':' + dos(d.getMinutes()); };
+const horaSeg = (t) => horaMin(t) + ':' + dos(new Date(t).getSeconds());
+function horaEvento(t) {
+  const d = new Date(t), hoy = new Date();
+  const mismoDia = d.toDateString() === hoy.toDateString();
+  return (mismoDia ? '' : dos(d.getDate()) + '/' + dos(d.getMonth() + 1) + ' ') + horaSeg(t);
+}
+function hace(ms) {
+  if (ms < 0) ms = 0;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return 'hace ' + s + ' s';
+  const m = Math.round(s / 60);
+  if (m < 60) return 'hace ' + m + ' min';
+  return 'hace ' + Math.round(m / 60) + ' h';
+}
+function guardar(k, v) { try { localStorage.setItem('smartrack.' + k, v); } catch (e) { /* sin almacenamiento */ } }
+function leer(k) { try { return localStorage.getItem('smartrack.' + k); } catch (e) { return null; } }
+
+/* ---------- iconos de estado (siempre con texto al lado) ---------- */
+const ICONOS = {
+  bueno:   '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="var(--bueno)"/><path d="m4.8 8.2 2.1 2.1 4.3-4.5" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  aviso:   '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 15 14H1z" fill="var(--aviso)" stroke="var(--aviso)" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 6v3.6" stroke="#0b0b0b" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.8" r=".95" fill="#0b0b0b"/></svg>',
+  critico: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="var(--critico)"/><path d="M8 4.3v4.4" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.3" r="1" fill="#fff"/></svg>',
+  neutro:  '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="var(--tinta-3)" stroke-width="1.6"/></svg>',
+  info:    '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="var(--tinta-3)"/><path d="M8 7.2v4" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="4.9" r="1" fill="#fff"/></svg>',
+  blanco:  '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 15 14H1z" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6v3.6" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.8" r=".95" fill="#fff"/></svg>'
+};
+const NIVEL_EVENTO = { ok: 'bueno', aviso: 'aviso', critico: 'critico', info: 'info' };
+function conIcono(nodo, nivel, texto) {        // icono + texto (el texto va con textContent)
+  const clave = nivel + '|' + texto;
+  if (nodo.dataset.clave === clave) return;     // sin cambios: no tocar el DOM
+  nodo.dataset.clave = clave;
+  nodo.innerHTML = ICONOS[nivel] || '';
+  const s = document.createElement('span'); s.textContent = texto; nodo.appendChild(s);
+}
+function ponerTexto(nodo, t) { if (nodo.textContent !== t) nodo.textContent = t; }
+
+/* =====================================================================
+   API real (Node-RED) o simulada (?demo)
+   ===================================================================== */
+async function pedirJSON(url, opciones) {
+  const r = await fetch(url, Object.assign({ cache: 'no-store', credentials: 'same-origin' }, opciones || {}));
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+const api = DEMO ? crearApiDemo() : {
+  estado: () => pedirJSON('api/estado'),
+  historial: (h) => pedirJSON('api/historial?horas=' + h),
+  eventos: () => pedirJSON('api/eventos'),
+  apagar: () => pedirJSON('api/alarma/apagar', { method: 'POST', headers: { 'X-SmartRack': '1' } })
+};
+
+function crearApiDemo() {
+  // Simula el ESP32 en el navegador: misma lógica de alarma que el .ino
+  const PASO = 10000, MAX = 720;
+  const azar = (i) => { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+  const tempEn = (t) => { const m = t / 60000;
+    return 26.4 + 2.7 * Math.sin(2 * Math.PI * m / 97) + 1.0 * Math.sin(2 * Math.PI * m / 23 + 1.3) + (azar(Math.floor(t / 2000)) - .5) * .3; };
+  const puertaEn = (t) => { const b = Math.floor(t / 1200000), r = azar(b + 11);
+    if (r > .5) return 'CERRADA'; const ini = Math.floor(r * 34) % 17, m = (t / 60000) % 20;
+    return (m >= ini && m < ini + 1.5 + (b % 3)) ? 'ABIERTA' : 'CERRADA'; };
+  const hist = [], eventos = [];
+  const s = { alarma: false, reconocida: false, desde: 0, puerta: null, silenciadoPor: null, t: 0, temp: 0, hum: 0 };
+  const ev = (t, tipo, texto, nivel) => { eventos.push({ t, tipo, texto, nivel }); if (eventos.length > 300) eventos.shift(); };
+  function silenciar(t, origen) {
+    if (!s.alarma) return; s.alarma = false; s.reconocida = true; s.silenciadoPor = origen;
+    ev(t, 'alarma', 'Alarma silenciada desde ' + (origen === 'MQTT' ? 'MQTT / dashboard' : 'el botón físico'), 'info');
+  }
+  function avanzar(t) {
+    s.t = t; s.temp = r1(tempEn(t)); s.hum = r1(57 - (s.temp - 26.4) * 2.1 + (azar(t / 3000 + 5) - .5) * 1.2);
+    const alta = s.temp >= UMBRAL;
+    if (alta && !s.reconocida && !s.alarma) { s.alarma = true; s.desde = t; ev(t, 'alarma', 'Alarma activada: temperatura alta', 'critico'); }
+    if (!alta && !s.alarma) s.reconocida = false;
+    if (s.alarma && t - s.desde > (2 + Math.floor(azar(s.desde / PASO) * 5)) * 60000 && t < Date.now() - 300000) {
+      silenciar(t, azar(s.desde) > .5 ? 'BOTON_FISICO' : 'MQTT');   // en el pasado alguien la apagó
+    }
+    const p = puertaEn(t);
+    if (s.puerta !== null && p !== s.puerta) ev(t, 'puerta', p === 'ABIERTA' ? 'Puerta abierta' : 'Puerta cerrada', p === 'ABIERTA' ? 'aviso' : 'ok');
+    s.puerta = p;
+  }
+  let t0 = Date.now() - 24 * 3600 * 1000;
+  ev(t0, 'conexion', 'ESP32 conectado al broker', 'ok');
+  for (let t = t0; t <= Date.now(); t += PASO) { avanzar(t); hist.push([t, s.temp, s.hum, s.alarma ? 1 : 0, s.puerta === 'ABIERTA' ? 1 : 0]); }
+  function alDia() {
+    const ahora = Date.now();
+    avanzar(ahora);
+    if (ahora - hist[hist.length - 1][0] >= PASO) hist.push([ahora, s.temp, s.hum, s.alarma ? 1 : 0, s.puerta === 'ABIERTA' ? 1 : 0]);
+    while (hist.length && hist[0][0] < ahora - 24 * 3600 * 1000) hist.shift();
+  }
+  const espera = (x) => new Promise((ok) => setTimeout(() => ok(x), 120));
+  return {
+    estado() {
+      alDia();
+      const alta = s.temp >= UMBRAL, vista = Math.floor(Date.now() / 3000) % 2 === 1;
+      const l1 = vista ? 'Puerta: ' + s.puerta : 'Temp: ' + s.temp.toFixed(1) + ' C';
+      const l2 = s.alarma ? 'ALARMA ACTIVA!' : (vista ? 'Alarma: APAGADA' : 'Hum: ' + s.hum.toFixed(1) + ' %');
+      return espera({
+        servidor: { ts: Date.now(), mqttConectado: true },
+        esp32: { conexion: 'CONECTADO', ip: '192.168.1.57', enLinea: true, ultimoMensaje: Date.now() - 900 },
+        datos: { dhtValido: true, temperatura: s.temp, humedad: s.hum, puerta: s.puerta, temperaturaAlta: alta,
+                 alarma: s.alarma, ledRojo: alta, ledVerde: !alta, buzzer: s.alarma, botonFisico: 'LIBRE' },
+        alarma: { estado: s.alarma ? 'ACTIVA' : 'APAGADA', ultimoSilenciadoPor: s.silenciadoPor },
+        lcd: [l1, l2]
+      });
+    },
+    historial(h) {
+      alDia();
+      const hasta = Date.now(), desde = hasta - h * 3600 * 1000;
+      let p = hist.filter((x) => x[0] >= desde);
+      if (p.length > MAX) {
+        const paso = Math.ceil(p.length / MAX), red = [];
+        for (let i = 0; i < p.length; i += paso) {
+          const g = p.slice(i, i + paso);
+          red.push([g[0][0], r1(g.reduce((a, q) => a + q[1], 0) / g.length), r1(g.reduce((a, q) => a + q[2], 0) / g.length),
+                    Math.max(...g.map((q) => q[3])), Math.max(...g.map((q) => q[4]))]);
+        }
+        p = red;
+      }
+      return espera({ desde, hasta, horas: h, puntos: p });
+    },
+    eventos() { alDia(); return espera(eventos.slice(-100).reverse()); },
+    apagar() {
+      const t = Date.now();
+      ev(t, 'alarma', 'Orden APAGAR enviada desde el dashboard (demo)', 'info');
+      silenciar(t, 'MQTT');
+      return espera({ ok: true, enviado: 'APAGAR', mqttConectado: true });
+    }
+  };
+}
+
+/* =====================================================================
+   Gráfico de línea (SVG) con cruz + tooltip y navegación por teclado
+   ===================================================================== */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function nodoSvg(tag, attrs, padre) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (padre) padre.appendChild(e);
+  return e;
+}
+function ticksBonitos(min, max, n) {
+  const rango = (max - min) || 1, bruto = rango / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(bruto))), r = bruto / mag;
+  const paso = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag;
+  const ini = Math.floor(min / paso) * paso, fin = Math.ceil(max / paso) * paso, ticks = [];
+  for (let v = ini; v <= fin + paso / 2; v += paso) ticks.push(Math.round(v * 1000) / 1000);
+  return { min: ini, max: fin, ticks };
+}
+function ticksTiempo(desde, hasta, ancho) {
+  const minutos = (hasta - desde) / 60000, maxTicks = Math.max(2, Math.floor(ancho / 78));
+  const pasos = [1, 2, 5, 10, 15, 30, 60, 120, 180, 240, 360, 720];
+  const paso = pasos.find((p) => minutos / p <= maxTicks) || 720;
+  const base = new Date(desde); base.setHours(0, 0, 0, 0);
+  const d = new Date(desde), ini = Math.ceil((d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60) / paso) * paso;
+  const out = [];
+  for (let m = ini; ; m += paso) { const t = base.getTime() + m * 60000; if (t > hasta) break; out.push(t); }
+  return out;
+}
+
+class Grafico {
+  constructor(contenedor, cfg) {
+    this.cont = contenedor; this.cfg = cfg;
+    this.filas = []; this.pts = []; this.desde = Date.now() - 3600e3; this.hasta = Date.now(); this.idx = -1;
+    this.svg = nodoSvg('svg', { tabindex: '0', role: 'img' }, contenedor);
+    this.svg.addEventListener('pointermove', (e) => this.mover(e));
+    this.svg.addEventListener('pointerleave', () => this.ocultarCruz());
+    this.svg.addEventListener('focus', () => { if (this.pts.length) this.marcar(this.idx >= 0 ? this.idx : this.pts.length - 1); });
+    this.svg.addEventListener('blur', () => this.ocultarCruz());
+    this.svg.addEventListener('keydown', (e) => this.tecla(e));
+    new ResizeObserver(() => this.dibujar()).observe(contenedor);
+  }
+  datos(filas, desde, hasta) { this.filas = filas; this.desde = desde; this.hasta = hasta; this.dibujar(); }
+
+  dibujar() {
+    const c = this.cfg, W = Math.max(260, Math.round(this.cont.clientWidth || 600)), H = c.alto || 236;
+    const m = this.m = { t: 12, r: 62, b: 26, l: 34 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const svg = this.svg;
+    svg.replaceChildren();
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.setAttribute('class', c.claseSerie);
+    const desde = this.desde, hasta = this.hasta;
+    const pts = this.pts = this.filas.filter((f) => typeof f[c.col] === 'number' && f[0] >= desde - 60000);
+
+    // Escala Y
+    let lo, hi;
+    if (pts.length) { lo = Math.min(...pts.map((p) => p[c.col])); hi = Math.max(...pts.map((p) => p[c.col])); }
+    else { lo = c.vacio[0]; hi = c.vacio[1]; }
+    if (c.umbral != null) { lo = Math.min(lo, c.umbral - 1); hi = Math.max(hi, c.umbral + .5); }
+    if (hi - lo < c.rangoMin) { const centro = (hi + lo) / 2; lo = centro - c.rangoMin / 2; hi = centro + c.rangoMin / 2; }
+    if (c.limite) { lo = Math.max(c.limite[0], lo); hi = Math.min(c.limite[1], hi); }
+    const esc = ticksBonitos(lo, hi, 4);
+    const X = this.X = (t) => m.l + (t - desde) / (hasta - desde) * iw;
+    const Y = this.Y = (v) => m.t + (1 - (v - esc.min) / (esc.max - esc.min)) * ih;
+
+    // Grilla + ticks Y
+    const gEjes = nodoSvg('g', {}, svg);
+    esc.ticks.forEach((v, i) => {
+      const y = Math.round(Y(v)) + .5;
+      nodoSvg('line', { x1: m.l, x2: m.l + iw, y1: y, y2: y, class: i === 0 ? 'g-base' : 'g-grilla' }, gEjes);
+      const tx = nodoSvg('text', { x: m.l - 7, y: y + 4, 'text-anchor': 'end', class: 'g-tick' }, gEjes);
+      tx.textContent = Number.isInteger(v) ? String(v) : v.toFixed(1);
+    });
+    ticksTiempo(desde, hasta, iw).forEach((t) => {
+      const x = X(t); if (x < m.l + 14 || x > m.l + iw - 8) return;
+      const tx = nodoSvg('text', { x, y: H - 6, 'text-anchor': 'middle', class: 'g-tick' }, gEjes);
+      tx.textContent = horaMin(t);
+    });
+
+    // Bandas de alarma (columna 3 de cada fila)
+    if (c.bandas) {
+      const gB = nodoSvg('g', {}, svg);
+      let ini = null;
+      const cerrar = (fin) => {
+        const x0 = Math.max(m.l, X(ini)), x1 = Math.min(m.l + iw, X(fin));
+        if (x1 > x0) nodoSvg('rect', { x: x0, y: m.t, width: Math.max(1, x1 - x0), height: ih, class: 'g-banda' }, gB);
+        ini = null;
+      };
+      this.filas.forEach((f, i) => {
+        if (f[3] === 1 && ini === null) ini = f[0];
+        if (f[3] !== 1 && ini !== null) cerrar(f[0]);
+        if (i === this.filas.length - 1 && ini !== null) cerrar(Math.min(hasta, f[0] + 10000));
+      });
+    }
+
+    // Umbral
+    if (c.umbral != null) {
+      const y = Math.round(Y(c.umbral)) + .5;
+      nodoSvg('line', { x1: m.l, x2: m.l + iw, y1: y, y2: y, class: 'g-umbral' }, svg);
+      const tx = nodoSvg('text', { x: m.l + 6, y: y - 6 < m.t + 10 ? y + 14 : y - 6, class: 'g-umbral-txt' }, svg);
+      tx.textContent = 'Umbral ' + c.umbral + ' ' + c.unidad;
+    }
+
+    if (!pts.length) {
+      const tx = nodoSvg('text', { x: m.l + iw / 2, y: m.t + ih / 2, 'text-anchor': 'middle', class: 'g-vacio' }, svg);
+      tx.textContent = 'Aún no hay datos en este rango';
+      svg.setAttribute('aria-label', c.nombre + ': sin datos en el rango seleccionado');
+      return;
+    }
+
+    // Segmentos (se corta la línea si faltan datos más de 1 min o 3 intervalos)
+    const difs = []; for (let i = 1; i < pts.length; i++) difs.push(pts[i][0] - pts[i - 1][0]);
+    difs.sort((a, b) => a - b);
+    const huecoMax = Math.max(60000, 3 * (difs[Math.floor(difs.length / 2)] || 10000));
+    const segmentos = []; let actual = [];
+    pts.forEach((p, i) => {
+      if (i && p[0] - pts[i - 1][0] > huecoMax) { segmentos.push(actual); actual = []; }
+      actual.push(p);
+    });
+    segmentos.push(actual);
+    const base = m.t + ih;
+    const gS = nodoSvg('g', {}, svg);
+    segmentos.forEach((seg) => {
+      const linea = seg.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ',' + Y(p[c.col]).toFixed(1)).join('');
+      if (seg.length > 1) {
+        nodoSvg('path', { d: linea + `L${X(seg[seg.length - 1][0]).toFixed(1)},${base}L${X(seg[0][0]).toFixed(1)},${base}Z`, class: 'g-area' }, gS);
+      }
+      nodoSvg('path', { d: linea + (seg.length === 1 ? 'h.1' : ''), class: 'g-linea' }, gS);
+    });
+
+    // Último valor: punto + etiqueta
+    const u = pts[pts.length - 1];
+    nodoSvg('circle', { cx: X(u[0]), cy: Y(u[c.col]), r: 4, class: 'g-punto' }, svg);
+    const et = nodoSvg('text', { x: X(u[0]) + 9, y: Y(u[c.col]) + 4, class: 'g-etiqueta' }, svg);
+    et.textContent = fmt1(u[c.col]) + ' ' + c.unidad;
+
+    const valores = pts.map((p) => p[c.col]);
+    svg.setAttribute('aria-label', `${c.nombre}: ${pts.length} lecturas entre ${horaMin(desde)} y ${horaMin(hasta)}. ` +
+      `Mínimo ${fmt1(Math.min(...valores))}, máximo ${fmt1(Math.max(...valores))}, actual ${fmt1(u[c.col])} ${c.unidad}. ` +
+      'Usa las flechas para recorrer los valores.');
+
+    this.gCruz = nodoSvg('g', { 'pointer-events': 'none' }, svg);
+    nodoSvg('rect', { x: m.l, y: m.t, width: iw, height: ih, fill: 'transparent' }, svg);
+    if (this.idx >= 0 && document.activeElement === svg) this.marcar(Math.min(this.idx, pts.length - 1));
+  }
+
+  mover(e) {
+    if (!this.pts.length) return;
+    const caja = this.svg.getBoundingClientRect(), escala = caja.width / this.svg.viewBox.baseVal.width;
+    const px = (e.clientX - caja.left) / escala;
+    const m = this.m, iw = this.svg.viewBox.baseVal.width - m.l - m.r;
+    if (px < m.l - 10 || px > m.l + iw + 10) { this.ocultarCruz(); return; }
+    const t = this.desde + (px - m.l) / iw * (this.hasta - this.desde);
+    let lo = 0, hi = this.pts.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (this.pts[mid][0] < t) lo = mid + 1; else hi = mid; }
+    if (lo > 0 && Math.abs(this.pts[lo - 1][0] - t) < Math.abs(this.pts[lo][0] - t)) lo--;
+    this.marcar(lo, e.clientX, e.clientY);
+  }
+  tecla(e) {
+    if (!this.pts.length) return;
+    let i = this.idx < 0 ? this.pts.length - 1 : this.idx;
+    const salto = Math.max(1, Math.round(this.pts.length / 20));
+    if (e.key === 'ArrowLeft') i -= e.shiftKey ? salto : 1;
+    else if (e.key === 'ArrowRight') i += e.shiftKey ? salto : 1;
+    else if (e.key === 'Home') i = 0;
+    else if (e.key === 'End') i = this.pts.length - 1;
+    else if (e.key === 'Escape') { this.ocultarCruz(); return; }
+    else return;
+    e.preventDefault();
+    this.marcar(Math.max(0, Math.min(this.pts.length - 1, i)));
+  }
+  marcar(i, cx, cy) {
+    const p = this.pts[i]; if (!p || !this.gCruz) return;
+    this.idx = i;
+    const m = this.m, H = this.svg.viewBox.baseVal.height, x = this.X(p[0]), y = this.Y(p[this.cfg.col]);
+    this.gCruz.replaceChildren();
+    nodoSvg('line', { x1: Math.round(x) + .5, x2: Math.round(x) + .5, y1: m.t, y2: H - m.b, class: 'g-cruz' }, this.gCruz);
+    nodoSvg('circle', { cx: x, cy: y, r: 5, class: 'g-punto' }, this.gCruz);
+    const caja = this.svg.getBoundingClientRect(), escala = caja.width / this.svg.viewBox.baseVal.width;
+    if (cx === undefined) { cx = caja.left + x * escala; cy = caja.top + y * escala; }
+    mostrarTooltip(p, cx, cy);
+  }
+  ocultarCruz() { if (this.gCruz) this.gCruz.replaceChildren(); $('tooltip').hidden = true; }
+}
+
+function mostrarTooltip(fila, cx, cy) {
+  const tt = $('tooltip');
+  tt.replaceChildren();
+  const h = document.createElement('div'); h.className = 'tt-hora'; h.textContent = horaEvento(fila[0]); tt.appendChild(h);
+  const filaTT = (color, valor, nombre, icono) => {
+    const d = document.createElement('div'); d.className = 'tt-fila';
+    if (icono) { d.insertAdjacentHTML('beforeend', ICONOS[icono]); }
+    else { const k = document.createElement('i'); k.className = 'tt-clave'; k.style.background = color; d.appendChild(k); }
+    const v = document.createElement('strong'); v.textContent = valor; d.appendChild(v);
+    const n = document.createElement('span'); n.textContent = nombre; d.appendChild(n);
+    tt.appendChild(d);
+  };
+  filaTT('var(--serie-1)', fmt1(fila[1]) + ' °C', 'Temperatura');
+  filaTT('var(--serie-2)', fmt1(fila[2]) + ' %', 'Humedad');
+  if (fila[3] === 1) filaTT(null, 'Activa', 'Alarma', 'critico');
+  if (fila[4] === 1) filaTT(null, 'Abierta', 'Puerta', 'aviso');
+  tt.hidden = false;
+  const w = tt.offsetWidth, hh = tt.offsetHeight;
+  let x = cx + 14, y = cy - hh - 12;
+  if (x + w > window.innerWidth - 8) x = cx - w - 14;
+  if (y < 8) y = cy + 16;
+  tt.style.left = Math.max(8, x) + 'px'; tt.style.top = y + 'px';
+}
+
+/* =====================================================================
+   Estado de la interfaz
+   ===================================================================== */
+const ui = {
+  horas: parseFloat(leer('horas')) || 1,
+  vista: leer('vista') === 'tabla' ? 'tabla' : 'grafico',
+  historial: null, estado: null, errorServidor: false, eventos: [], ultimaAlarma: null, desfase: 0
+};
+const gTemp = new Grafico($('gTemp'), { col: 1, nombre: 'Temperatura', unidad: '°C', claseSerie: 's1', umbral: UMBRAL,
+                                         rangoMin: 4, vacio: [20, 32], bandas: true });
+const gHum  = new Grafico($('gHum'),  { col: 2, nombre: 'Humedad', unidad: '%', claseSerie: 's2', umbral: null,
+                                         rangoMin: 10, vacio: [40, 70], limite: [0, 100] });
+
+/* ---------- tema ---------- */
+function aplicarTema(t) { if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; }
+aplicarTema(leer('tema'));
+$('btnTema').addEventListener('click', () => {
+  const oscuro = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === 'dark'
+    : matchMedia('(prefers-color-scheme: dark)').matches;
+  const nuevo = oscuro ? 'light' : 'dark';
+  aplicarTema(nuevo); guardar('tema', nuevo);
+});
+
+/* ---------- filtros ---------- */
+function pintarFiltros() {
+  document.querySelectorAll('#segRango button').forEach((b) => b.setAttribute('aria-pressed', String(parseFloat(b.dataset.horas) === ui.horas)));
+  document.querySelectorAll('#segVista button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.vista === ui.vista)));
+  $('graficos').hidden = ui.vista !== 'grafico';
+  $('tablaCard').hidden = ui.vista !== 'tabla';
+}
+$('segRango').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  ui.horas = parseFloat(b.dataset.horas); guardar('horas', ui.horas); pintarFiltros(); cargarHistorial(true);
+});
+$('segVista').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  ui.vista = b.dataset.vista; guardar('vista', ui.vista); pintarFiltros(); pintarHistorial();
+});
+if (DEMO) {   // en modo demo no hay servidor detrás: los enlaces solo avisan
+  document.querySelectorAll('#lnkCsv, .pie a').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault(); avisar('Modo demo: esto funciona en el servidor real.');
+  }));
+}
+
+/* ---------- avisos ---------- */
+let temporizadorAviso = null;
+function avisar(texto) {
+  const a = $('avisoFlotante'); a.textContent = texto; a.hidden = false;
+  clearTimeout(temporizadorAviso); temporizadorAviso = setTimeout(() => { a.hidden = true; }, 3500);
+}
+async function apagarAlarma(boton) {
+  const original = boton.textContent;
+  boton.disabled = true; boton.textContent = 'Enviando…';
+  try {
+    const r = await api.apagar();
+    avisar(r.ok ? 'Orden APAGAR enviada al ESP32' : 'El servidor no aceptó la orden');
+  } catch (e) {
+    avisar('No se pudo enviar la orden (' + e.message + ')');
+  } finally {
+    setTimeout(() => { boton.textContent = original; cicloEstado(); cargarEventos(); }, 700);
+  }
+}
+$('btnApagar').addEventListener('click', (e) => apagarAlarma(e.currentTarget));
+$('bannerBtn').addEventListener('click', (e) => apagarAlarma(e.currentTarget));
+
+/* =====================================================================
+   Pintar estado
+   ===================================================================== */
+function pintarEstado() {
+  const e = ui.estado, ahora = Date.now();
+  // ---- píldora de conexión
+  let nivel = 'neutro', texto = 'Esperando al ESP32';
+  if (ui.errorServidor) { nivel = 'critico'; texto = 'Sin conexión con el servidor'; }
+  else if (e) {
+    const con = e.esp32 && e.esp32.conexion;
+    if (e.servidor && e.servidor.mqttConectado === false) { nivel = 'aviso'; texto = 'Servidor sin conexión al broker'; }
+    else if (e.esp32 && e.esp32.enLinea) { nivel = 'bueno'; texto = 'ESP32 en línea'; }
+    else if (con === 'DESCONECTADO') { nivel = 'critico'; texto = 'ESP32 desconectado'; }
+    else if (con === 'CONECTADO') { nivel = 'aviso'; texto = 'ESP32 sin datos recientes'; }
+  }
+  conIcono($('pill'), nivel, texto);
+  if (DEMO && !$('pill').querySelector('.pill-demo')) $('pill').insertAdjacentHTML('beforeend', '<span class="pill-demo">Demo</span>');
+
+  if (!e) return;
+  const d = e.datos || {};
+  const enLinea = !!(e.esp32 && e.esp32.enLinea);
+  const ultimo = e.esp32 && e.esp32.ultimoMensaje;
+  const sensorOk = d.dhtValido === true;
+  const edad = ultimo ? (ahora - ui.desfase) - ultimo : 0;   // corrige diferencia de reloj con el servidor
+  ponerTexto($('actualizado'), ultimo ? 'Último dato ' + hace(edad) : '');
+
+  // ---- temperatura
+  document.querySelectorAll('.tile').forEach((t) => t.classList.toggle('viejo', !enLinea));
+  const temp = sensorOk ? d.temperatura : null, hum = sensorOk ? d.humedad : null;
+  ponerTexto($('vTemp'), fmt1(temp));
+  const viejo = !enLinea && e.datos ? ' · último valor conocido' : '';
+  if (!e.datos) conIcono($('eTemp'), 'neutro', 'Sin datos todavía');
+  else if (!sensorOk) conIcono($('eTemp'), 'aviso', 'Sin lectura del sensor' + viejo);
+  else if (d.temperaturaAlta) conIcono($('eTemp'), 'critico', 'Sobre el umbral de ' + UMBRAL + ' °C' + viejo);
+  else if (temp >= UMBRAL - 2) conIcono($('eTemp'), 'aviso', 'Cerca del umbral' + viejo);
+  else conIcono($('eTemp'), 'bueno', 'Normal' + viejo);
+  const pct = (v, a, b) => Math.max(0, Math.min(100, (v - a) / (b - a) * 100));
+  $('mTemp').style.width = temp == null ? '0' : pct(temp, 15, 40) + '%';
+  $('mTemp').style.background = temp == null ? 'var(--serie-1)' : temp >= UMBRAL ? 'var(--critico)' : temp >= UMBRAL - 2 ? 'var(--aviso)' : 'var(--serie-1)';
+  $('mTempUmbral').style.left = pct(UMBRAL, 15, 40) + '%';
+
+  // ---- humedad
+  ponerTexto($('vHum'), fmt1(hum));
+  $('mHum').style.width = hum == null ? '0' : pct(hum, 0, 100) + '%';
+
+  // ---- puerta
+  if (d.puerta) {
+    const abierta = d.puerta === 'ABIERTA';
+    conIcono($('vPuerta'), abierta ? 'aviso' : 'bueno', abierta ? 'Abierta' : 'Cerrada');
+    const evP = ui.eventos.find((x) => x.tipo === 'puerta');
+    ponerTexto($('ePuerta'), evP ? (abierta ? 'Abierta desde las ' : 'Cerrada desde las ') + horaMin(evP.t) : 'Sensor magnético');
+  }
+
+  // ---- alarma
+  const activa = (e.alarma && e.alarma.estado === 'ACTIVA') || d.alarma === true;
+  const silenciadaPor = e.alarma && e.alarma.ultimoSilenciadoPor;
+  const nombreOrigen = (o) => o === 'BOTON_FISICO' ? 'botón físico' : o === 'MQTT' ? 'MQTT / dashboard' : (o || '–');
+  conIcono($('vAlarma'), activa ? 'critico' : 'bueno', activa ? 'Activa' : 'Apagada');
+  ponerTexto($('eAlarma'), activa ? 'El buzzer está sonando'
+    : (d.temperaturaAlta ? 'Silenciada (' + nombreOrigen(silenciadaPor) + ')' : 'Se activa a ' + UMBRAL + ' °C o más'));
+  const btn = $('btnApagar');
+  if (btn.textContent !== 'Enviando…') btn.disabled = !activa;
+  btn.classList.toggle('btn-peligro', activa);
+
+  // ---- banner
+  const banner = $('banner');
+  if (activa) {
+    banner.className = 'banner critico'; banner.hidden = false;
+    if ($('bannerIco').dataset.n !== 'blanco') { $('bannerIco').innerHTML = ICONOS.blanco; $('bannerIco').dataset.n = 'blanco'; }
+    ponerTexto($('bannerTit'), 'Alarma activa: temperatura alta');
+    ponerTexto($('bannerDet'), 'El rack está a ' + fmt1(temp) + ' °C (umbral ' + UMBRAL + ' °C). El buzzer sigue sonando hasta que alguien la apague.');
+    $('bannerBtn').hidden = false;
+  } else if (sensorOk && d.temperaturaAlta) {
+    banner.className = 'banner aviso'; banner.hidden = false;
+    if ($('bannerIco').dataset.n !== 'aviso') { $('bannerIco').innerHTML = ICONOS.aviso; $('bannerIco').dataset.n = 'aviso'; }
+    ponerTexto($('bannerTit'), 'Temperatura sobre el umbral, alarma silenciada');
+    ponerTexto($('bannerDet'), 'Silenciada desde ' + nombreOrigen(silenciadaPor) + '. Volverá a sonar si la temperatura baja de ' + UMBRAL + ' °C y vuelve a subir.');
+    $('bannerBtn').hidden = true;
+  } else {
+    banner.hidden = true;
+  }
+  if (ui.ultimaAlarma !== null && ui.ultimaAlarma !== activa) {
+    $('anuncio').textContent = activa ? 'Atención: alarma de temperatura activada' : 'La alarma se apagó';
+  }
+  ui.ultimaAlarma = activa;
+
+  // ---- actuadores
+  const led = (id, on, clase, txtOn, txtOff) => {
+    const n = $(id), clave = String(on);
+    if (n.dataset.clave === clave) return;
+    n.dataset.clave = clave; n.replaceChildren();
+    const l = document.createElement('span'); l.className = 'led' + (on ? ' ' + clase : ''); n.appendChild(l);
+    n.appendChild(document.createTextNode(on ? txtOn : txtOff));
+  };
+  led('aRojo', d.ledRojo === true, 'on-rojo', 'Encendido', 'Apagado');
+  led('aVerde', d.ledVerde === true, 'on-verde', 'Encendido', 'Apagado');
+  if (d.buzzer === true) conIcono($('aBuzzer'), 'critico', 'Sonando'); else conIcono($('aBuzzer'), 'neutro', 'En silencio');
+  if (d.botonFisico === 'PRESIONADO') conIcono($('aBoton'), 'info', 'Presionado'); else conIcono($('aBoton'), 'neutro', 'Libre');
+  if (!e.datos) conIcono($('aDht'), 'neutro', 'Sin datos');
+  else if (sensorOk) conIcono($('aDht'), 'bueno', 'Leyendo'); else conIcono($('aDht'), 'aviso', 'Sin lectura');
+
+  // ---- LCD
+  const lcd = $('lcd');
+  const linea = (s) => String(s == null ? '' : s).slice(0, 16).padEnd(16, ' ');
+  const l1 = e.lcd && e.lcd[0] != null ? e.lcd[0] : 'SMART RACK IoT', l2 = e.lcd && e.lcd[1] != null ? e.lcd[1] : 'Esperando...';
+  ponerTexto(lcd, linea(l1) + '\n' + linea(l2));
+  lcd.classList.toggle('apagada', !enLinea);
+
+  // ---- dispositivo
+  const con = e.esp32 && e.esp32.conexion;
+  if (con === 'CONECTADO') conIcono($('dConexion'), enLinea ? 'bueno' : 'aviso', enLinea ? 'Conectado' : 'Conectado, sin datos');
+  else if (con === 'DESCONECTADO') conIcono($('dConexion'), 'critico', 'Desconectado');
+  else conIcono($('dConexion'), 'neutro', 'Nunca se conectó');
+  ponerTexto($('dIp'), (e.esp32 && e.esp32.ip) || '–');
+  ponerTexto($('dUltimo'), ultimo ? horaSeg(ultimo) + ' (' + hace(edad) + ')' : '–');
+  if (e.servidor && e.servidor.mqttConectado) conIcono($('dBroker'), 'bueno', 'Conectado'); else conIcono($('dBroker'), 'critico', 'Desconectado');
+  ponerTexto($('dSilencio'), silenciadaPor ? nombreOrigen(silenciadaPor) : '–');
+}
+
+/* ---------- historial ---------- */
+function pintarHistorial() {
+  const h = ui.historial; if (!h) return;
+  if (ui.vista === 'grafico') {
+    gTemp.datos(h.puntos, h.desde, h.hasta);
+    gHum.datos(h.puntos, h.desde, h.hasta);
+  } else {
+    const cuerpo = $('tablaCuerpo'), filas = h.puntos.slice().reverse(), max = 300;
+    cuerpo.replaceChildren();
+    filas.slice(0, max).forEach((p) => {
+      const tr = document.createElement('tr');
+      const celda = (txt, clase) => { const td = document.createElement('td'); if (clase) td.className = clase; td.textContent = txt; tr.appendChild(td); return td; };
+      celda(horaEvento(p[0]), 'num');
+      celda(fmt1(p[1]), 'der num'); celda(fmt1(p[2]), 'der num');
+      const a = celda(''); if (p[3] === 1) conIcono(a, 'critico', 'Activa'); else a.textContent = '–';
+      const pu = celda(''); if (p[4] === 1) conIcono(pu, 'aviso', 'Abierta'); else pu.textContent = 'Cerrada';
+      cuerpo.appendChild(tr);
+    });
+    if (!filas.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 5; td.className = 'vacio'; td.textContent = 'Aún no hay datos en este rango'; tr.appendChild(td); cuerpo.appendChild(tr); }
+    $('tablaSub').textContent = filas.length + ' lecturas';
+    $('tablaNota').textContent = filas.length > max ? `Se muestran las ${max} más recientes. Descarga el CSV para verlas todas.` : '';
+  }
+}
+
+/* ---------- eventos ---------- */
+function pintarEventos() {
+  const cuerpo = $('eventos'); cuerpo.replaceChildren();
+  if (!ui.eventos.length) {
+    const tr = document.createElement('tr'); const td = document.createElement('td'); td.className = 'vacio'; td.textContent = 'Todavía no hay eventos.'; tr.appendChild(td); cuerpo.appendChild(tr); return;
+  }
+  ui.eventos.slice(0, 60).forEach((ev) => {
+    const tr = document.createElement('tr');
+    const t = document.createElement('td'); t.className = 'num'; t.textContent = horaEvento(ev.t); tr.appendChild(t);
+    const d = document.createElement('td'); const s = document.createElement('span'); s.className = 'ev-txt';
+    conIcono(s, NIVEL_EVENTO[ev.nivel] || 'info', ev.texto); d.appendChild(s); tr.appendChild(d);
+    cuerpo.appendChild(tr);
+  });
+}
+
+/* =====================================================================
+   Ciclos de actualización
+   ===================================================================== */
+let timerEstado = null;
+async function cicloEstado() {
+  clearTimeout(timerEstado);
+  try {
+    ui.estado = await api.estado(); ui.errorServidor = false;
+    if (ui.estado.servidor && ui.estado.servidor.ts) ui.desfase = Date.now() - ui.estado.servidor.ts;
+  } catch (e) { ui.errorServidor = true; }
+  pintarEstado();
+  clearTimeout(timerEstado);
+  timerEstado = setTimeout(cicloEstado, document.hidden ? 10000 : PERIODO_ESTADO);
+}
+let pidiendoHistorial = false;
+async function cargarHistorial(conAviso) {
+  if (pidiendoHistorial) return;
+  pidiendoHistorial = true;
+  if (conAviso) { $('gTemp').classList.add('cargando'); $('gHum').classList.add('cargando'); }
+  try { ui.historial = await api.historial(ui.horas); pintarHistorial(); }
+  catch (e) { /* se conserva el gráfico anterior */ }
+  finally { pidiendoHistorial = false; $('gTemp').classList.remove('cargando'); $('gHum').classList.remove('cargando'); }
+}
+async function cargarEventos() {
+  try { ui.eventos = await api.eventos(); pintarEventos(); } catch (e) { /* reintenta en el próximo ciclo */ }
+}
+
+/* ---------- arranque ---------- */
+$('host').textContent = DEMO ? 'modo demostración' : location.host;
+$('umbralTxt').textContent = UMBRAL;
+$('mTempUmbralTxt').textContent = UMBRAL + ' °C';
+const hostMqtt = DEMO ? 'tu-dominio.duckdns.org' : location.hostname;
+$('pieMqtt').textContent = hostMqtt + ':1883';
+$('pieWs').textContent = (location.protocol === 'https:' ? 'wss://' : 'ws://') + (DEMO ? hostMqtt : location.host) + '/mqtt';
+pintarFiltros();
+cicloEstado();
+cargarHistorial(true);
+cargarEventos();
+setInterval(() => cargarHistorial(false), PERIODO_HISTORIAL);
+setInterval(cargarEventos, PERIODO_EVENTOS);
+setInterval(() => { if (ui.estado) pintarEstado(); }, 1000);   // refresca los "hace X s"
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { cicloEstado(); cargarHistorial(false); } });
+</script>
+</body>
+</html>
